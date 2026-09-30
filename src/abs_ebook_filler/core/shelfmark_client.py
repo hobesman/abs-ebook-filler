@@ -26,6 +26,7 @@ from .models import Candidate, SearchResult
 
 TERMINAL_OK = {"complete"}
 TERMINAL_FAIL = {"error", "cancelled"}
+QUEUED_STATES = {"queued"}  # waiting in Shelfmark's own queue, not started yet
 EBOOK_EXTS = ("epub", "mobi", "azw3", "azw", "pdf", "fb2", "cbz", "cbr", "djvu")
 
 
@@ -103,6 +104,9 @@ class ShelfmarkClient:
                  search_concurrency: int = 1):
         self.search_timeout = search_timeout
         self._search_slots = asyncio.Semaphore(max(1, search_concurrency))
+        self._status_lock = asyncio.Lock()
+        self._queue_lock = asyncio.Lock()
+        self._status_cache: tuple[float, dict[str, Any]] | None = None
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"X-Api-Key": api_key},
@@ -242,17 +246,38 @@ class ShelfmarkClient:
 
     # ---- downloading ---------------------------------------------------------------
     async def queue_download(self, release: dict[str, Any]) -> str:
-        if not release.get("source_id"):
+        """Queue a release; returns the Shelfmark task id (= the release's source_id).
+
+        Shelfmark refuses to queue a release it already has queued, downloading or complete. That
+        happens when two books pick the same release (an omnibus) or a finished release is picked
+        again - in those cases we join the existing download instead of failing.
+        """
+        task_id = str(release.get("source_id") or "")
+        if not task_id:
             raise ShelfmarkError("Release has no source_id; cannot queue it")
-        r = await self._http.post("/api/releases/download", json=release)
-        if r.status_code >= 400:
-            try:
-                msg = r.json().get("error") or r.text
-            except Exception:
-                msg = r.text
-            raise ShelfmarkError(f"Shelfmark refused the download ({r.status_code}): {msg}")
+        async with self._queue_lock:  # two books racing to queue the same release
+            r = await self._http.post("/api/releases/download", json=release)
+            if r.status_code >= 400:
+                try:
+                    msg = r.json().get("error") or r.text
+                except Exception:
+                    msg = r.text
+                if "already in the download queue" in str(msg).lower():
+                    found = find_task(await self.status(), task_id)
+                    if found and found[0] not in TERMINAL_FAIL:
+                        return task_id
+                raise ShelfmarkError(f"Shelfmark refused the download ({r.status_code}): {msg}")
         body = r.json() if r.content else {}
-        return str(body.get("task_id") or body.get("id") or release["source_id"])
+        return str(body.get("task_id") or body.get("id") or task_id)
+
+    async def shared_status(self, max_age: float) -> dict[str, Any]:
+        """``/api/status``, fetched at most once per ``max_age`` seconds however many downloads are
+        waiting on it (each parallel download would otherwise poll on its own)."""
+        async with self._status_lock:
+            now = time.monotonic()
+            if self._status_cache is None or now - self._status_cache[0] >= max_age:
+                self._status_cache = (now, await self.status())
+            return self._status_cache[1]
 
     async def wait_for(
         self,
@@ -260,11 +285,19 @@ class ShelfmarkClient:
         timeout: float = 600.0,
         interval: float = 3.0,
         on_progress: Callable[[str, float | None, str], Any] | None = None,
+        queue_timeout: float = 3600.0,
     ) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout
+        """Wait for a Shelfmark download to finish.
+
+        Two clocks: ``queue_timeout`` limits time spent waiting in Shelfmark's own queue (it only runs
+        MAX_CONCURRENT_DOWNLOADS at a time), and ``timeout`` only starts once Shelfmark is actually
+        working on it - so a book parked behind other downloads doesn't "time out" before it starts.
+        """
+        started = time.monotonic()
+        working_since: float | None = None
         missing_polls = 0
         while True:
-            found = find_task(await self.status(), task_id)
+            found = find_task(await self.shared_status(max_age=interval * 0.9), task_id)
             if found:
                 missing_polls = 0
                 group, task = found
@@ -279,12 +312,19 @@ class ShelfmarkClient:
                     raise ShelfmarkError(
                         task.get("status_message") or task.get("last_error_message") or f"Download {state}"
                     )
+                now = time.monotonic()
+                if state in QUEUED_STATES:
+                    if now - started > queue_timeout:
+                        raise ShelfmarkError(
+                            f"Still waiting in Shelfmark's queue after {int(queue_timeout)}s (task {task_id})")
+                else:
+                    working_since = working_since or now
+                    if now - working_since > timeout:
+                        raise ShelfmarkError(f"Timed out after {int(timeout)}s downloading task {task_id}")
             else:
                 missing_polls += 1
                 if missing_polls >= 10:
                     raise ShelfmarkError(f"Task {task_id} disappeared from the Shelfmark queue")
-            if time.monotonic() > deadline:
-                raise ShelfmarkError(f"Timed out after {int(timeout)}s waiting for task {task_id}")
             await asyncio.sleep(interval)
 
     async def fetch_file(self, task_id: str, dest: Path) -> None:

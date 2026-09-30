@@ -148,6 +148,6 @@ async def test_worker_resumes_interrupted_items(service):
     service.state.update("li_1", status="downloading", release=REL)  # simulate crash mid-download
     worker = Worker(service)
     await worker.start()
-    await worker.queue.join()
+    await worker.drain()
     await worker.stop()
     assert service.state.get("li_1")["status"] == "done"

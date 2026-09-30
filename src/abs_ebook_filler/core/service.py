@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -12,7 +13,8 @@ from .abs_client import ABSClient, has_ebook, is_missing_ebook, item_to_book
 from .config import Settings
 from .matching import build_query, primary_author, score
 from .models import Book, Candidate, SearchResult
-from .shelfmark_client import ShelfmarkClient, release_format
+from .ratelimit import rate_limit_wait
+from .shelfmark_client import QUEUED_STATES, ShelfmarkClient, ShelfmarkError, release_format
 from .state import State, source_key
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ class Service:
         self.s = settings
         self.state = state or State(Path(settings.data_dir) / "state.db")
         self.abs = abs_client or ABSClient(settings.abs_url, settings.abs_token, settings.http_timeout)
+        self._sleep = asyncio.sleep  # swapped out in tests to skip real cooldown waits
         self.sm = shelfmark or ShelfmarkClient(
             settings.shelfmark_url, settings.shelfmark_api_key, settings.http_timeout,
             search_timeout=settings.search_timeout, search_concurrency=settings.search_concurrency)
@@ -121,17 +124,49 @@ class Service:
         self.state.update(item_id, status="queued", release=release, progress=None, message="Queued",
                           queued_at=time.time())
 
+    async def _download(self, item_id: str, release: dict[str, Any],
+                        on_progress: ProgressCb | None) -> tuple[str, dict[str, Any]]:
+        """Queue in Shelfmark and wait; re-queue after a rate-limit cooldown (RATE_LIMIT_RETRIES)."""
+
+        async def progress(state: str, pct: float | None, msg: str) -> None:
+            if state in QUEUED_STATES:
+                # Parked behind other downloads in Shelfmark's own queue: still "queued" to us too.
+                self.state.update(item_id, status="queued", progress=None,
+                                  message="Waiting in Shelfmark's queue")
+            else:
+                label = {"resolving": "Resolving", "locating": "Finding a mirror",
+                         "downloading": "Downloading"}.get(state, state.capitalize())
+                pct_txt = f" {pct:.0f}%" if isinstance(pct, (int, float)) else ""
+                self.state.update(item_id, status="downloading", progress=pct,
+                                  message=f"{label}{pct_txt}" + (f": {msg}" if msg else ""))
+            if on_progress:
+                on_progress(state, pct, msg)
+
+        attempt = 0
+        while True:
+            try:
+                self.state.update(item_id, status="downloading", progress=None, message="Sending to Shelfmark")
+                task_id = await self.sm.queue_download(release)
+                task = await self.sm.wait_for(
+                    task_id, self.s.download_timeout, self.s.poll_interval, progress,
+                    queue_timeout=self.s.queue_wait_timeout)
+                return task_id, task
+            except ShelfmarkError as e:
+                wait = rate_limit_wait([str(e)])
+                if wait is None or attempt >= self.s.rate_limit_retries:
+                    raise
+                attempt += 1
+                self.state.update(item_id, status="queued", progress=None,
+                                  message=f"Rate-limited, retrying in ~{int(wait + 5)}s "
+                                          f"(attempt {attempt + 1} of {self.s.rate_limit_retries + 1})")
+                await self._sleep(wait + 5)
+
     async def process(self, item_id: str, on_progress: ProgressCb | None = None) -> Path:
         """Download the chosen release for an item and place it next to the audio files."""
         row = self.state.get(item_id)
         if not row or not row.get("release"):
             raise ValueError(f"No release chosen for {item_id}")
         release = row["release"]
-
-        async def progress(state: str, pct: float | None, msg: str) -> None:
-            self.state.update(item_id, status="downloading", progress=pct, message=msg or state)
-            if on_progress:
-                on_progress(state, pct, msg)
 
         temp: Path | None = None
         try:
@@ -140,10 +175,7 @@ class Service:
             filename = placer.safe_filename(row["clean_title"], row["author"], "epub")
             final, temp = placer.prepare_target(folder, filename)
 
-            self.state.update(item_id, status="downloading", progress=None, message="Sending to Shelfmark")
-            task_id = await self.sm.queue_download(release)
-            task = await self.sm.wait_for(
-                task_id, self.s.download_timeout, self.s.poll_interval, progress)
+            task_id, task = await self._download(item_id, release, on_progress)
 
             self.state.update(item_id, message="Copying into audiobook folder")
             src = task.get("download_path")

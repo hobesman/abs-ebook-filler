@@ -97,8 +97,14 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   Unmatch buttons appear in a failed book's panel, above its search results.
 - **Settings** – current config (secrets hidden) and a connection test.
 
-Downloads run in the background one at a time (`WORKER_CONCURRENCY`), so you can queue several books and keep
-browsing. Interrupted downloads resume when the container restarts. State lives in `./data/state.db`.
+Downloads run in the background, so you can queue many books and keep browsing. Up to `DOWNLOAD_CONCURRENCY`
+(3) run at once, but Anna's Archive (*Direct Download*) only one at a time (`DIRECT_DOWNLOAD_CONCURRENCY`), since
+it rate-limits; a waiting Anna's Archive book never holds up a torrent queued behind it. Set Shelfmark's own
+`MAX_CONCURRENT_DOWNLOADS` at least as high, or the extras just wait in Shelfmark's queue (shown as "Waiting in
+Shelfmark's queue"; that time doesn't count toward `DOWNLOAD_TIMEOUT`, only `QUEUE_WAIT_TIMEOUT`). A download
+that fails on a rate limit is re-queued automatically after the cooldown (`RATE_LIMIT_RETRIES`, 2). If two
+books pick the same release they share one download. Interrupted downloads resume when the container restarts.
+State lives in `./data/state.db`.
 
 ## CLI
 

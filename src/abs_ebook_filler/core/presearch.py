@@ -8,32 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable
 
+from .ratelimit import is_rate_limit, rate_limit_wait  # noqa: F401  (re-exported for the web app)
 from .service import Service
 from .shelfmark_client import ShelfmarkError
 
 log = logging.getLogger(__name__)
-
-_COOLDOWN_RE = re.compile(r"~\s*(\d+)\s*s\b")
-DEFAULT_COOLDOWN = 90.0
-
-
-def is_rate_limit(msg: str) -> bool:
-    m = (msg or "").lower()
-    return "429" in m or "rate-limit" in m or "rate limit" in m or "cooldown" in m
-
-
-def rate_limit_wait(messages: list[str]) -> float | None:
-    """Seconds to wait if any message is a rate-limit notice ("... for ~87s until the cooldown clears")."""
-    for msg in messages:
-        if is_rate_limit(msg):
-            m = _COOLDOWN_RE.search(msg)
-            return float(m.group(1)) if m else DEFAULT_COOLDOWN
-    return None
 
 
 @dataclass

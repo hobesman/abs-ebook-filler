@@ -24,8 +24,18 @@ class Settings(BaseSettings):
     min_score: int = 0
     max_candidates: int = 8
     poll_interval: float = 3.0
+    # Clock only runs while Shelfmark is working on a download; time waiting in Shelfmark's own
+    # queue (it runs MAX_CONCURRENT_DOWNLOADS at once) is limited separately by queue_wait_timeout.
     download_timeout: float = 600.0
-    worker_concurrency: int = 1
+    queue_wait_timeout: float = 3600.0
+    # Books downloading at once, overall and per source. Anna's Archive (direct_download) rate-limits
+    # hard, so it stays at 1; torrents/usenet via Prowlarr can run side by side. Shelfmark's own
+    # MAX_CONCURRENT_DOWNLOADS must be at least download_concurrency for this to help.
+    download_concurrency: int = 3
+    direct_download_concurrency: int = 1
+    worker_concurrency: int = 0  # legacy name for download_concurrency; used if set
+    # Automatic re-queue of a download that failed on a rate limit, after the cooldown.
+    rate_limit_retries: int = 2
     http_timeout: float = 60.0
     # Release searches hit every enabled source; Shelfmark's own budget is release_search_timeout (300s).
     search_timeout: float = 330.0
@@ -40,6 +50,16 @@ class Settings(BaseSettings):
     @property
     def search_cache_seconds(self) -> float:
         return self.search_cache_hours * 3600
+
+    @property
+    def total_download_slots(self) -> int:
+        return max(1, self.worker_concurrency or self.download_concurrency)
+
+    def source_limit(self, source: str) -> int:
+        """Max simultaneous downloads for one release source."""
+        if (source or "").lower() == "direct_download":
+            return max(1, min(self.direct_download_concurrency, self.total_download_slots))
+        return self.total_download_slots
 
     # Web
     web_user: str = "admin"

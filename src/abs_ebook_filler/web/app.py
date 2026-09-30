@@ -52,7 +52,7 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         svc = service or Service(settings)
-        worker = Worker(svc, settings.worker_concurrency)
+        worker = Worker(svc)  # DOWNLOAD_CONCURRENCY slots, per-source limits from settings
         app.state.svc = svc
         app.state.worker = worker
         app.state.cands = {}  # item_id -> list[Candidate] from the last search
