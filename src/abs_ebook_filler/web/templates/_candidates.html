@@ -57,7 +57,8 @@
         <td>{{ c.language }}</td>
         <td><small>{{ c.source }}</small></td>
         <td><small>{{ c.popularity or "" }}</small></td>
-        <td><button class="small" hx-post="/book/{{ item_id }}/download/{{ loop.index0 }}" hx-target="#panel"
+        <td><button class="small dl-btn" data-score="{{ c.score }}" data-title="{{ c.title }}"
+                    hx-post="/book/{{ item_id }}/download/{{ loop.index0 }}" hx-target="#panel"
                     hx-disabled-elt="this">Download</button></td>
       </tr>
     {% endfor %}

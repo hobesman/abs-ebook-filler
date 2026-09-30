@@ -34,6 +34,10 @@ def test_auth_and_flow(settings, service):
         assert "Searching Shelfmark" in c.get("/book/li_1").text
         cands = c.get("/book/li_1/candidates").text
         assert "Download" in cands
+        # Hooks used by auto-download in app.js: per-button score, panel status.
+        assert 'class="small dl-btn" data-score="100"' in cands
+        assert 'data-status="missing"' in c.get("/book/li_1").text
+        assert 'id="auto-dl"' in c.get("/").text
 
         r = c.post("/book/li_1/download/0")
         assert r.status_code == 200 and "Queued" in r.text

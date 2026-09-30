@@ -84,6 +84,12 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
 - **Rapid mode** (toggle on the Books page, remembered per browser) – after **Download** or **Skip** the
   panel jumps straight to the next missing/failed book in the list and searches it. The next book's search is
   started in the background while you look at the current one, so results are usually ready when you arrive.
+- **Auto-download 100s** (toggle next to Rapid mode, remembered per browser) – when a book's results include a
+  release scored exactly 100 from an enabled (not hidden) source, it's queued automatically after a
+  one-second notice. Lower scores, hidden sources, or the toggle off → it waits for you as usual. Only applies
+  to books still marked missing (never re-queues a failed book's release). With rapid mode on, runs of perfect
+  matches go through hands-free and stop at the first book that needs you; combine with pre-search so the
+  results are already there.
 - Click any cover to see it full size (click again or press Esc to close).
 - **Activity** – live progress for queued downloads, recent successes and failures. A failed download offers
   **Retry** (same release), **Search again** (unmatch and jump to that book's search to pick a different

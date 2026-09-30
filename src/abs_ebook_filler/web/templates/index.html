@@ -23,6 +23,10 @@
   <label class="rapid-toggle" title="After Download or Skip, jump to the next book and search it automatically">
     <input type="checkbox" role="switch" id="rapid"> Rapid mode
   </label>
+  <label class="rapid-toggle"
+         title="When a book's results include a release scored 100 from an enabled source, queue it automatically. Anything less waits for you. Only books still marked missing.">
+    <input type="checkbox" role="switch" id="auto-dl"> Auto-download 100s
+  </label>
   <button hx-post="/scan" hx-indicator="#scan-spin" hx-disabled-elt="this">
     Rescan library <span id="scan-spin" class="htmx-indicator" aria-busy="true"></span>
   </button>
