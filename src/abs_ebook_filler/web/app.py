@@ -126,7 +126,14 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return _panel(request, item_id)
 
     def _search_task(request: Request, item_id: str, q: str) -> asyncio.Task:
-        """Reuse an in-flight or recent search for the same item+query (rapid-mode prefetch)."""
+        """Reuse an in-flight or recent search for the same item+query (rapid-mode prefetch).
+
+        Keyed by the *effective* query, so "" (use the default), the default typed into the box,
+        and a previously edited query that has since become the default all share one search.
+        """
+        s = svc(request)
+        row = s.state.get(item_id)
+        q = q.strip() or (s.default_query(row) if row else "")
         searches = request.app.state.searches
         now = time.monotonic()
         for key in [k for k, (_, t0, _) in searches.items() if now - t0 > SEARCH_CACHE_SECONDS]:
@@ -137,7 +144,7 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
             if not (t.done() and (t.cancelled() or t.exception() is not None)):
                 return t
         # Cache the unfiltered list so source toggles can re-filter without searching again.
-        task = asyncio.create_task(svc(request).search_all(item_id, q or None))
+        task = asyncio.create_task(s.search_all(item_id, q or None))
         task.add_done_callback(lambda t: t.cancelled() or t.exception())  # silence "never retrieved"
         searches[item_id] = (q, now, task)
         return task
@@ -166,14 +173,10 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     @r.get("/book/{item_id}/candidates", response_class=HTMLResponse)
     async def candidates(request: Request, item_id: str, q: str = ""):
         s = svc(request)
-        row = s.state.get(item_id)
-        # The default query and an empty query are the same search.
-        if row and q.strip() == s.default_query(row):
-            q = ""
         error = ""
         all_cands: list = []
         try:
-            all_cands = await asyncio.shield(_search_task(request, item_id, q.strip()))
+            all_cands = await asyncio.shield(_search_task(request, item_id, q))
         except Exception as e:
             request.app.state.searches.pop(item_id, None)
             error = f"{type(e).__name__}: {e}"
