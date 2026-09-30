@@ -40,6 +40,7 @@
     <form class="search" hx-get="/book/{{ row.item_id }}/candidates" hx-target="#cands"
           hx-indicator="#search-spin">
       <input type="search" name="q" id="search-q" value="{{ query }}" aria-label="Search query">
+      <input type="hidden" name="fresh" value="true">
       <button type="submit">Search <span id="search-spin" class="htmx-indicator" aria-busy="true"></span></button>
     </form>
     <div id="cands" hx-get="/book/{{ row.item_id }}/candidates" hx-trigger="load">

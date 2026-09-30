@@ -107,7 +107,7 @@ async def test_disabled_sources_filtered_before_limit(service):
     respx.get("http://sm/api/releases").mock(return_value=httpx.Response(200, json={"releases": mam + [aa]}))
     service.s.max_candidates = 8
 
-    all_cands = await service.search_all("li_1")
+    all_cands = (await service.search_all("li_1")).cands
     shown, hidden = service.select(all_cands)
     assert len(shown) == 8 and hidden == 0
 

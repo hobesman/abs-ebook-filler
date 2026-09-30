@@ -13,8 +13,27 @@
 </div>
 {% endif %}
 
+{% if warnings or error %}
+<div class="warn-box">
+  {% if warnings %}
+    <p><strong>⚠ Some sources failed, so these results may be incomplete:</strong></p>
+    <ul>{% for w in warnings %}<li><small>{{ w }}</small></li>{% endfor %}</ul>
+  {% else %}
+    <p class="error"><strong>Search failed:</strong> {{ error }}</p>
+  {% endif %}
+  {% if rate_limited %}
+    <p><small>Anna's Archive is limiting requests. Wait for the cooldown mentioned above, then search again.
+      Rapid mode's background search pauses while another search is running, so this should be rarer now.</small></p>
+  {% endif %}
+  <button class="small secondary" hx-get="/book/{{ item_id }}/candidates" hx-target="#cands"
+          hx-vals='{"fresh": "true"}' hx-include="#search-q" hx-indicator="#retry-spin"
+          hx-disabled-elt="this">
+    Search again <span id="retry-spin" class="htmx-indicator" aria-busy="true"></span>
+  </button>
+</div>
+{% endif %}
+
 {% if error %}
-  <p class="error">Search failed: {{ error }}</p>
 {% elif not cands %}
   <p class="muted">
     No EPUB releases {% if hidden %}from enabled sources ({{ hidden }} hidden by disabled sources){% else %}found. Try editing the search above{% endif %}.

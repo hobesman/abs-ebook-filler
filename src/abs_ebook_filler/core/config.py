@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     http_timeout: float = 60.0
     # Release searches hit every enabled source; Shelfmark's own budget is release_search_timeout (300s).
     search_timeout: float = 330.0
+    # Max release searches at once. Keep at 1: Anna's Archive rate-limits (429) parallel searches.
+    search_concurrency: int = 1
 
     # Web
     web_user: str = "admin"

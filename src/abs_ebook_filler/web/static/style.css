@@ -55,6 +55,11 @@ td.row-actions { white-space: nowrap; }
 td.row-actions form { display: inline; margin: 0; }
 td.row-actions button { margin: 0 .2rem .2rem 0; }
 
+/* partial / failed searches */
+.warn-box { border-left: 4px solid #ca8a04; padding: .5rem .75rem; margin-bottom: .75rem;
+            background: color-mix(in srgb, #ca8a04 10%, transparent); border-radius: 4px; }
+.warn-box p, .warn-box ul { margin-bottom: .4rem; }
+
 /* source toggles */
 .sources { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .75rem; }
 .chip { width: auto; margin: 0; padding: .2rem .65rem; font-size: .82em; border-radius: 999px; }

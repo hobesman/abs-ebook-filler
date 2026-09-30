@@ -11,7 +11,7 @@ from . import placer
 from .abs_client import ABSClient, has_ebook, is_missing_ebook, item_to_book
 from .config import Settings
 from .matching import build_query, primary_author, score
-from .models import Book, Candidate
+from .models import Book, Candidate, SearchResult
 from .shelfmark_client import ShelfmarkClient, release_format
 from .state import State, source_key
 
@@ -28,7 +28,7 @@ class Service:
         self.abs = abs_client or ABSClient(settings.abs_url, settings.abs_token, settings.http_timeout)
         self.sm = shelfmark or ShelfmarkClient(
             settings.shelfmark_url, settings.shelfmark_api_key, settings.http_timeout,
-            search_timeout=settings.search_timeout)
+            search_timeout=settings.search_timeout, search_concurrency=settings.search_concurrency)
 
     async def aclose(self) -> None:
         await self.abs.aclose()
@@ -53,7 +53,7 @@ class Service:
 
     async def search(self, item_id: str, query: str | None = None) -> list[Candidate]:
         """Search and return what should be shown: enabled sources only, top N."""
-        return self.select(await self.search_all(item_id, query))[0]
+        return self.select((await self.search_all(item_id, query)).cands)[0]
 
     def select(self, cands: list[Candidate]) -> tuple[list[Candidate], int]:
         """Apply min score, disabled sources and the candidate limit.
@@ -65,8 +65,9 @@ class Service:
         shown = [c for c in good if source_key(c.source) not in disabled]
         return shown[: self.s.max_candidates], len(good) - len(shown)
 
-    async def search_all(self, item_id: str, query: str | None = None) -> list[Candidate]:
-        """Every EPUB release Shelfmark finds, scored and sorted best-first (no filtering)."""
+    async def search_all(self, item_id: str, query: str | None = None) -> SearchResult:
+        """Every EPUB release Shelfmark finds, scored and sorted best-first (no filtering),
+        plus any per-source failures such as a rate-limited Anna's Archive."""
         row = self.state.get(item_id)
         if not row:
             raise KeyError(item_id)
@@ -80,12 +81,12 @@ class Service:
         def rank(t: str, a: str) -> float:
             return score(t, a, row["clean_title"], row["title"], row["author"])
 
-        cands = await self.sm.search(row["clean_title"], primary_author(row["author"]),
-                                     manual_query=manual, book_id=item_id, rank=rank)
-        for c in cands:
+        res = await self.sm.search(row["clean_title"], primary_author(row["author"]),
+                                   manual_query=manual, book_id=item_id, rank=rank)
+        for c in res.cands:
             c.score = rank(c.title, c.author)
-        cands.sort(key=lambda c: (c.score, c.popularity), reverse=True)
-        return cands
+        res.cands.sort(key=lambda c: (c.score, c.popularity), reverse=True)
+        return res
 
     # ---- skipping ----------------------------------------------------------------
     def skip(self, item_id: str) -> None:

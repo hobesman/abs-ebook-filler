@@ -79,6 +79,27 @@ def test_failed_book_retry_unmatch_and_search_again(settings, service):
 
 
 @respx.mock
+def test_rate_limit_warning_and_search_again(settings, service):
+    mock_abs()
+    mock_shelfmark()
+    warn = "direct_download: annas-archive.gl is rate-limited (429); skipping bypass for ~87s"
+    search_route = respx.get("http://sm/api/releases").mock(
+        return_value=httpx.Response(200, json={"releases": [REL], "errors": [warn]}))
+    app = create_app(settings, service)
+    with TestClient(app) as c:
+        c.auth = ("admin", "pw")
+        c.post("/scan")
+        html = c.get("/book/li_1/candidates").text
+        assert "Some sources failed" in html and "rate-limited (429)" in html
+        assert "limiting requests" in html and "Search again" in html
+        assert "Download</button>" in html  # partial results still usable
+        c.get("/book/li_1/candidates")  # panel reload / toggle: reuse
+        assert search_route.call_count == 1
+        c.get("/book/li_1/candidates", params={"fresh": "true"})  # explicit Search again
+        assert search_route.call_count == 2
+
+
+@respx.mock
 def test_prefetch_is_reused_and_full_size_cover(settings, service):
     mock_abs()
     mock_shelfmark()

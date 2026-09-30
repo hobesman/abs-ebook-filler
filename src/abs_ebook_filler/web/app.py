@@ -18,7 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..core.config import Settings, get_settings
+from ..core.models import SearchResult
 from ..core.service import Service
+from ..core.shelfmark_client import ShelfmarkError
 from ..core.state import STATUSES, source_key
 from .worker import Worker
 
@@ -27,6 +29,11 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 security = HTTPBasic(realm="abs-ebook-filler")
 SEARCH_CACHE_SECONDS = 15 * 60
+
+
+def _is_rate_limit(msg: str) -> bool:
+    m = (msg or "").lower()
+    return "429" in m or "rate-limit" in m or "rate limit" in m or "cooldown" in m
 
 
 def create_app(settings: Settings | None = None, service: Service | None = None) -> FastAPI:
@@ -125,11 +132,13 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     async def book(request: Request, item_id: str):
         return _panel(request, item_id)
 
-    def _search_task(request: Request, item_id: str, q: str) -> asyncio.Task:
+    def _search_task(request: Request, item_id: str, q: str, fresh: bool = False) -> asyncio.Task:
         """Reuse an in-flight or recent search for the same item+query (rapid-mode prefetch).
 
         Keyed by the *effective* query, so "" (use the default), the default typed into the box,
         and a previously edited query that has since become the default all share one search.
+        ``fresh`` (an explicit Search click) ignores a finished result, but still joins one that
+        is in flight rather than firing a second, parallel search at Shelfmark.
         """
         s = svc(request)
         row = s.state.get(item_id)
@@ -141,7 +150,9 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         hit = searches.get(item_id)
         if hit and hit[0] == q:
             t = hit[2]
-            if not (t.done() and (t.cancelled() or t.exception() is not None)):
+            if not t.done():
+                return t
+            if not fresh and not t.cancelled() and t.exception() is None:
                 return t
         # Cache the unfiltered list so source toggles can re-filter without searching again.
         task = asyncio.create_task(s.search_all(item_id, q or None))
@@ -171,20 +182,21 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return sorted(chips.values(), key=lambda ch: (-ch["count"], ch["label"].lower()))
 
     @r.get("/book/{item_id}/candidates", response_class=HTMLResponse)
-    async def candidates(request: Request, item_id: str, q: str = ""):
+    async def candidates(request: Request, item_id: str, q: str = "", fresh: bool = False):
         s = svc(request)
         error = ""
-        all_cands: list = []
+        res = SearchResult()
         try:
-            all_cands = await asyncio.shield(_search_task(request, item_id, q))
+            res = await asyncio.shield(_search_task(request, item_id, q, fresh))
         except Exception as e:
             request.app.state.searches.pop(item_id, None)
-            error = f"{type(e).__name__}: {e}"
-        cands, hidden = s.select(all_cands)
+            error = str(e) if isinstance(e, ShelfmarkError) else f"{type(e).__name__}: {e}"
+        cands, hidden = s.select(res.cands)
         request.app.state.cands[item_id] = cands  # download buttons index into this list
         return templates.TemplateResponse(request, "_candidates.html", ctx(
             request, item_id=item_id, cands=cands, error=error, hidden=hidden,
-            sources=_source_chips(s, all_cands)))
+            warnings=res.warnings, rate_limited=any(_is_rate_limit(w) for w in [*res.warnings, error]),
+            sources=_source_chips(s, res.cands)))
 
     @r.post("/book/{item_id}/sources", response_class=HTMLResponse)
     async def toggle_source(request: Request, item_id: str, source: str = Form(...),

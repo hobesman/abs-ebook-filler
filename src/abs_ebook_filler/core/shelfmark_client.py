@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 import httpx
 
-from .models import Candidate
+from .models import Candidate, SearchResult
 
 TERMINAL_OK = {"complete"}
 TERMINAL_FAIL = {"error", "cancelled"}
@@ -99,8 +99,10 @@ def find_task(status: dict[str, Any], task_id: str) -> tuple[str, dict[str, Any]
 
 class ShelfmarkClient:
     def __init__(self, base_url: str, api_key: str, timeout: float = 60.0,
-                 transport: httpx.AsyncBaseTransport | None = None, search_timeout: float = 330.0):
+                 transport: httpx.AsyncBaseTransport | None = None, search_timeout: float = 330.0,
+                 search_concurrency: int = 1):
         self.search_timeout = search_timeout
+        self._search_slots = asyncio.Semaphore(max(1, search_concurrency))
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers={"X-Api-Key": api_key},
@@ -154,19 +156,36 @@ class ShelfmarkClient:
             return data.get("releases") or data.get("results") or []
         return []
 
-    async def manual_releases(self, title: str, author: str = "", manual_query: str = "",
-                              book_id: str = "abs") -> list[dict[str, Any]]:
+    @staticmethod
+    def _errors_from(data: Any) -> list[str]:
+        """Per-source failures Shelfmark reports alongside partial results (e.g. a 429 rate limit)."""
+        if isinstance(data, dict):
+            return [str(e) for e in data.get("errors") or [] if e]
+        return []
+
+    async def _release_search(self, **params) -> tuple[list[dict[str, Any]], list[str]]:
+        # Release searches hit every source (incl. Anna's Archive, which rate-limits hard), so
+        # never run more than `search_concurrency` at once, e.g. a rapid-mode prefetch alongside
+        # the search you're looking at.
+        async with self._search_slots:
+            data = await self._get("/api/releases", _timeout=self.search_timeout, **params)
+        return self._releases_from(data), self._errors_from(data)
+
+    async def manual_releases_with_errors(self, title: str, author: str = "", manual_query: str = "",
+                                          book_id: str = "abs") -> tuple[list[dict[str, Any]], list[str]]:
         """Release search across all enabled sources using our own title/author.
 
         ``provider=manual`` makes Shelfmark build the search book from ``title``/``author``
         (no metadata-provider lookup). ``manual_query`` overrides the query text sent to sources.
         """
-        data = await self._get(
-            "/api/releases", _timeout=self.search_timeout,
+        return await self._release_search(
             provider="manual", book_id=book_id or "abs", title=title or manual_query,
             author=author, manual_query=manual_query, content_type="ebook",
         )
-        return self._releases_from(data)
+
+    async def manual_releases(self, title: str, author: str = "", manual_query: str = "",
+                              book_id: str = "abs") -> list[dict[str, Any]]:
+        return (await self.manual_releases_with_errors(title, author, manual_query, book_id))[0]
 
     async def metadata_search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         data = await self._get("/api/metadata/search", query=query, content_type="ebook", limit=limit)
@@ -174,28 +193,25 @@ class ShelfmarkClient:
             return data.get("books") or data.get("results") or []
         return data if isinstance(data, list) else []
 
-    async def releases_for_book(self, provider: str, book_id: str, title: str = "") -> list[dict[str, Any]]:
-        data = await self._get(
-            "/api/releases", _timeout=self.search_timeout,
+    async def releases_for_book(self, provider: str, book_id: str,
+                                title: str = "") -> tuple[list[dict[str, Any]], list[str]]:
+        return await self._release_search(
             provider=provider, book_id=book_id, title=title, content_type="ebook",
         )
-        return self._releases_from(data)
 
     async def search(self, title: str, author: str, manual_query: str = "", book_id: str = "abs",
-                     metadata_hits: int = 2,
-                     rank: Callable[[str, str], float] | None = None) -> list[Candidate]:
-        """Manual (title/author) release search; if that finds nothing, try metadata-provider books.
+                     metadata_hits: int = 1,
+                     rank: Callable[[str, str], float] | None = None) -> SearchResult:
+        """Manual (title/author) release search; if that finds nothing, try the best metadata book.
 
+        The metadata fallback only runs when the manual search completed cleanly and simply found
+        no EPUB. If a source failed (rate limit, timeout...) another full search would just hit the
+        same wall, and add to the rate limiting, so the failure is reported instead.
         ``rank(title, author)`` orders metadata hits so the closest book is searched first.
         """
-        cands: list[Candidate] = []
-        first_error: ShelfmarkError | None = None
-        try:
-            cands = [to_candidate(r, author)
-                     for r in await self.manual_releases(title, author, manual_query, book_id)]
-        except ShelfmarkError as e:
-            first_error = e
-        if not any(c.format == "epub" for c in cands):
+        rels, warnings = await self.manual_releases_with_errors(title, author, manual_query, book_id)
+        cands = [to_candidate(r, author) for r in rels]
+        if not warnings and not any(c.format == "epub" for c in cands):
             books = await self.metadata_search(manual_query or f"{title} {author}".strip())
             if rank:
                 books.sort(key=lambda b: rank(b.get("title") or "", _first(b.get("authors"), b.get("author"))),
@@ -207,12 +223,12 @@ class ShelfmarkClient:
                     continue
                 book_author = _first(book.get("authors"), book.get("author"), author)
                 try:
-                    for r in await self.releases_for_book(provider, str(pid), book.get("title") or ""):
-                        cands.append(to_candidate(r, book_author))
-                except ShelfmarkError:
+                    more, errs = await self.releases_for_book(provider, str(pid), book.get("title") or "")
+                except ShelfmarkError as e:
+                    warnings.append(str(e))
                     continue
-        if not cands and first_error:
-            raise first_error
+                warnings.extend(errs)
+                cands.extend(to_candidate(r, book_author) for r in more)
         # Dedupe by (source, source_id) and keep EPUB only.
         seen: set[tuple[str, str]] = set()
         out: list[Candidate] = []
@@ -222,7 +238,7 @@ class ShelfmarkClient:
                 continue
             seen.add(key)
             out.append(c)
-        return out
+        return SearchResult(out, list(dict.fromkeys(warnings)))
 
     # ---- downloading ---------------------------------------------------------------
     async def queue_download(self, release: dict[str, Any]) -> str:

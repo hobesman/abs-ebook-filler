@@ -37,7 +37,9 @@ async def test_manual_search_params_filter_and_dedupe():
     route = respx.get("http://sm/api/releases").mock(return_value=httpx.Response(
         200, json={"releases": [REL_EPUB, REL_PDF, REL_EPUB]}))
     async with ShelfmarkClient("http://sm", "key") as c:
-        cands = await c.search("The Way of Kings", "Brandon Sanderson", book_id="li_1")
+        res = await c.search("The Way of Kings", "Brandon Sanderson", book_id="li_1")
+    cands = res.cands
+    assert res.warnings == []
     assert [x.raw["source_id"] for x in cands] == ["md5a"]
     assert cands[0].author == "Brandon Sanderson"
     p = route.calls[0].request.url.params
@@ -71,8 +73,56 @@ async def test_search_falls_back_to_best_metadata_book():
     ]}))
     rank = lambda t, a: 100 if t == "The Way of Kings" else 0  # noqa: E731
     async with ShelfmarkClient("http://sm", "key") as c:
-        cands = await c.search("The Way of Kings", "Brandon Sanderson", metadata_hits=1, rank=rank)
-    assert len(cands) == 1
+        res = await c.search("The Way of Kings", "Brandon Sanderson", metadata_hits=1, rank=rank)
+    assert len(res.cands) == 1
+
+
+RATE_LIMIT = ("direct_download: Unable to reach download source. annas-archive.gl is rate-limited (429); "
+              "skipping bypass for ~87s until the cooldown clears.")
+
+
+@respx.mock
+async def test_partial_failure_reported_and_no_extra_searches():
+    mam = {**REL_EPUB, "source": "prowlarr", "source_id": "mam1", "indexer": "MyAnonamouse"}
+    releases = respx.get("http://sm/api/releases").mock(return_value=httpx.Response(
+        200, json={"releases": [mam], "errors": [RATE_LIMIT]}))
+    metadata = respx.get("http://sm/api/metadata/search").mock(
+        return_value=httpx.Response(200, json={"books": []}))
+    async with ShelfmarkClient("http://sm", "key") as c:
+        res = await c.search("The Way of Kings", "Brandon Sanderson")
+    assert [x.source for x in res.cands] == ["MyAnonamouse"]
+    assert res.warnings == [RATE_LIMIT]
+    assert releases.call_count == 1 and metadata.call_count == 0  # no fallback into the rate limit
+
+
+@respx.mock
+async def test_no_fallback_when_sources_failed_even_with_zero_epubs():
+    respx.get("http://sm/api/releases").mock(return_value=httpx.Response(
+        200, json={"releases": [REL_PDF], "errors": [RATE_LIMIT]}))
+    metadata = respx.get("http://sm/api/metadata/search").mock(
+        return_value=httpx.Response(200, json={"books": []}))
+    async with ShelfmarkClient("http://sm", "key") as c:
+        res = await c.search("X", "Y")
+    assert res.cands == [] and res.warnings == [RATE_LIMIT] and metadata.call_count == 0
+
+
+@respx.mock
+async def test_release_searches_run_one_at_a_time():
+    import asyncio
+    active = peak = 0
+
+    async def slow(request):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return httpx.Response(200, json={"releases": [REL_EPUB]})
+
+    respx.get("http://sm/api/releases").mock(side_effect=slow)
+    async with ShelfmarkClient("http://sm", "key") as c:  # search_concurrency defaults to 1
+        await asyncio.gather(c.search("A", "x"), c.search("B", "y"), c.search("C", "z"))
+    assert peak == 1
 
 
 @respx.mock

@@ -115,6 +115,10 @@ pytest
 - **"Audiobook folder not found"** – `PATH_MAP` or the library volume is wrong.
 - **Probe shows `shelfmark_manual_releases` failing with 503** – every release source errored (e.g. Anna's
   Archive unreachable / bypass failing); check Shelfmark's own logs.
+- **"Some sources failed … annas-archive.gl is rate-limited (429)"** – Anna's Archive throttles bursts of
+  searches. Results from the other sources are still shown; wait out the cooldown Shelfmark mentions and click
+  **Search again**. The tool runs only one release search at a time (`SEARCH_CONCURRENCY=1`) and skips its
+  metadata fallback when a source has failed, so it doesn't add to the throttling.
 - **The same book shows up once even though it's in two ABS libraries** – intended; overlapping libraries are
   de-duplicated by folder. Set `ABS_LIBRARY_IDS` to just your top-level library if you prefer.
 - **Ebook saved but ABS doesn't show "Read"** – run a library scan in ABS; check the file owner/permissions.

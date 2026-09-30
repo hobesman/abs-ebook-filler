@@ -23,6 +23,14 @@ def _service() -> Service:
     return Service(get_settings())
 
 
+async def _search(svc: Service, item_id: str, query: str | None = None):
+    """Search, print any per-source failures (e.g. a rate-limited Anna's Archive), return what to show."""
+    res = await svc.search_all(item_id, query)
+    for w in res.warnings:
+        console.print(f"[yellow]⚠ {w}[/]")
+    return svc.select(res.cands)[0]
+
+
 def _books_table(rows: list[dict]) -> Table:
     t = Table(show_lines=False)
     t.add_column("#", justify="right")
@@ -76,7 +84,7 @@ def dry_run(limit: int = typer.Option(5, help="How many books to search")):
                     console.print(f"[dim]ABS title: {r['title']}[/]")
                 console.print(f"[dim]Query: {svc.default_query(r)}[/]")
                 try:
-                    cands = await svc.search(r["item_id"])
+                    cands = await _search(svc, r["item_id"])
                 except Exception as e:
                     console.print(f"[red]Search failed: {e}[/]")
                     continue
@@ -145,7 +153,7 @@ def run(item: Optional[str] = typer.Option(None, help="Only this ABS item id"),
                         console.print(f"[dim]ABS title: {r['title']}[/]")
                     with console.status(f"Searching Shelfmark for “{query}”…"):
                         try:
-                            cands = await svc.search(r["item_id"], query)
+                            cands = await _search(svc, r["item_id"], query)
                         except Exception as e:
                             console.print(f"[red]Search failed: {e}[/]")
                             cands = []
