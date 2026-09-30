@@ -1,0 +1,57 @@
+<article class="book" data-item-id="{{ row.item_id }}">
+  <header class="book-head">
+    <img src="/cover/{{ row.item_id }}?width=240" alt="Cover" class="zoomable"
+         data-zoom="/cover/{{ row.item_id }}?width=0" onerror="this.style.display='none'">
+    <div>
+      <h4>{{ row.clean_title }}</h4>
+      <p class="muted">
+        {{ row.author }}{% if row.series %} · {{ row.series }}{% endif %}<br>
+        {% if row.clean_title != row.title %}<small>ABS title: {{ row.title }}</small><br>{% endif %}
+        <small><code>{{ row.path }}</code></small>
+      </p>
+      <span class="badge st-{{ row.status }}">{{ row.status }}</span>
+      {% if row.message %}<small class="muted"> {{ row.message }}</small>{% endif %}
+    </div>
+  </header>
+
+  {% if note %}<p class="note">{{ note }}</p>{% endif %}
+
+  {% if row.status == "failed" %}
+    <div class="failed-box">
+      <p><strong>Download failed</strong>{% if row.release %}: <em>{{ row.release.title }}</em>{% endif %}<br>
+        <small>{{ row.message }}</small></p>
+      <div class="actions">
+        {% if row.release %}
+        <button class="small" hx-post="/book/{{ row.item_id }}/retry" hx-target="#panel"
+                title="Try the same release again">Retry download</button>
+        {% endif %}
+        <button class="small secondary outline" hx-post="/book/{{ row.item_id }}/unmatch" hx-target="#panel"
+                title="Forget this release and put the book back in the Missing list">Unmatch</button>
+      </div>
+      <small class="muted">Or pick a different release below.</small>
+    </div>
+  {% endif %}
+
+  {% if row.status in ("queued", "downloading") %}
+    <p>Download in progress. See <a href="/activity">Activity</a>.</p>
+  {% elif row.status == "done" %}
+    <p>Saved to <code>{{ row.ebook_path }}</code></p>
+  {% else %}
+    <form class="search" hx-get="/book/{{ row.item_id }}/candidates" hx-target="#cands"
+          hx-indicator="#search-spin">
+      <input type="search" name="q" id="search-q" value="{{ query }}" aria-label="Search query">
+      <button type="submit">Search <span id="search-spin" class="htmx-indicator" aria-busy="true"></span></button>
+    </form>
+    <div id="cands" hx-get="/book/{{ row.item_id }}/candidates" hx-trigger="load">
+      <p aria-busy="true">Searching Shelfmark… <small class="muted">(checks every enabled source; can take a minute or two)</small></p>
+    </div>
+  {% endif %}
+
+  <footer class="actions">
+    {% if row.status == "skipped" %}
+      <button class="secondary" hx-post="/book/{{ row.item_id }}/unskip" hx-target="#panel">Un-skip</button>
+    {% elif row.status in ("missing", "failed") %}
+      <button class="secondary outline" hx-post="/book/{{ row.item_id }}/skip" hx-target="#panel">Skip this book</button>
+    {% endif %}
+  </footer>
+</article>

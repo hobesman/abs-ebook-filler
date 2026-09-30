@@ -1,0 +1,28 @@
+# Copy to docker-compose.yml and adjust. Put secrets in .env, never in this file.
+services:
+  abs-ebook-filler:
+    image: ghcr.io/hobesman/abs-ebook-filler:latest
+    # build: .   # or build from a clone of the repo
+    container_name: abs-ebook-filler
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8090:8090"   # keep both sides equal to WEB_PORT in .env
+    volumes:
+      - ./data:/data
+      # The SAME folder Audiobookshelf uses as its library, mounted read-write.
+      # The right side must match the local half of PATH_MAP (e.g. PATH_MAP=/audiobooks:/library).
+      - /srv/media/audiobooks:/library
+      # Optional: Shelfmark's download folder, if you'd rather copy than use /api/localdownload.
+      # - /srv/shelfmark/books:/shelfmark-books:ro
+
+# Library on a NAS share instead of a local folder? Replace the /library line above with
+#   - audiobooks:/library
+# and uncomment this (SMB_USERNAME / SMB_PASSWORD go in .env):
+# volumes:
+#   audiobooks:
+#     driver: local
+#     driver_opts:
+#       type: cifs
+#       device: "//NAS_IP/Share/Audiobooks"
+#       o: "username=${SMB_USERNAME},password=${SMB_PASSWORD},uid=1000,gid=1000"

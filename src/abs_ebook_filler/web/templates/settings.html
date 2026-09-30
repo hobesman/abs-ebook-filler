@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Settings · Ebook Filler{% endblock %}
+{% block content %}
+<h3>Configuration</h3>
+<p class="muted">Loaded from environment / <code>.env</code>. Restart the container after changing it.</p>
+<table>
+  <tbody>
+  {% for k, v in cfg.items() %}
+    <tr><th><code>{{ k|upper }}</code></th><td><code>{{ v }}</code></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>Connection test</h3>
+<form hx-post="/settings/probe" hx-target="#probe" hx-indicator="#probe-spin" class="search">
+  <input name="title" value="Dune" aria-label="Test title">
+  <input name="author" value="Frank Herbert" aria-label="Test author">
+  <button type="submit">Test ABS &amp; Shelfmark <span id="probe-spin" class="htmx-indicator" aria-busy="true"></span></button>
+</form>
+<div id="probe"></div>
+{% endblock %}

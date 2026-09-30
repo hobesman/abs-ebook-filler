@@ -1,0 +1,43 @@
+{% if sources %}
+<div class="sources" role="group" aria-label="Release sources">
+  <small class="muted" title="Applies to every book, including rapid mode">Sources:</small>
+  {% for s in sources %}
+    <button type="button" class="chip{% if not s.enabled %} off{% endif %}"
+            aria-pressed="{{ 'true' if s.enabled else 'false' }}"
+            title="{{ 'Hide' if s.enabled else 'Show' }} {{ s.label }} results (all books)"
+            hx-post="/book/{{ item_id }}/sources" hx-target="#cands" hx-include="#search-q"
+            hx-vals='{"source": {{ s.label|tojson }}, "enabled": {{ "false" if s.enabled else "true" }}}'>
+      {{ s.label }} <span class="count">{{ s.count }}</span>
+    </button>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if error %}
+  <p class="error">Search failed: {{ error }}</p>
+{% elif not cands %}
+  <p class="muted">
+    No EPUB releases {% if hidden %}from enabled sources ({{ hidden }} hidden by disabled sources){% else %}found. Try editing the search above{% endif %}.
+  </p>
+{% else %}
+  <div class="overflow-auto">
+  <table class="cands">
+    <thead><tr><th>Score</th><th>Title</th><th>Size</th><th>Lang</th><th>Source</th><th title="Seeders (torrent) or downloads (direct)">Pop.</th><th></th></tr></thead>
+    <tbody>
+    {% for c in cands %}
+      <tr>
+        <td><span class="score {% if c.score >= 85 %}hi{% elif c.score >= 60 %}mid{% else %}lo{% endif %}">{{ c.score }}</span></td>
+        <td>{{ c.title }}{% if c.author %}<br><small class="muted">{{ c.author }}</small>{% endif %}</td>
+        <td>{{ c.size }}</td>
+        <td>{{ c.language }}</td>
+        <td><small>{{ c.source }}</small></td>
+        <td><small>{{ c.popularity or "" }}</small></td>
+        <td><button class="small" hx-post="/book/{{ item_id }}/download/{{ loop.index0 }}" hx-target="#panel"
+                    hx-disabled-elt="this">Download</button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if hidden %}<small class="muted">{{ hidden }} more result(s) hidden by disabled sources.</small>{% endif %}
+{% endif %}

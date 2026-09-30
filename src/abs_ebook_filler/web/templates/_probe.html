@@ -1,0 +1,9 @@
+<ul class="probe-summary">
+{% for name, r in result.items() %}
+  <li>{% if r.ok %}✅{% else %}❌{% endif %} <code>{{ name }}</code>{% if not r.ok %}: {{ r.error }}{% endif %}</li>
+{% endfor %}
+</ul>
+<details>
+  <summary>Raw JSON</summary>
+  <pre class="probe">{{ text }}</pre>
+</details>

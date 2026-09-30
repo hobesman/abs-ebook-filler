@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Ebook Filler{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+</head>
+<body>
+  <header class="container-fluid topbar">
+    <nav>
+      <ul><li><strong>📚 Ebook Filler</strong></li></ul>
+      <ul>
+        <li><a href="/">Missing</a></li>
+        <li><a href="/activity">Activity</a></li>
+        <li><a href="/settings">Settings</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main class="container-fluid">
+    {% block content %}{% endblock %}
+  </main>
+  <dialog id="lightbox" aria-label="Cover image">
+    <img alt="Cover (full size)">
+  </dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

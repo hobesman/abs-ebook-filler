@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}<article class="flash">{{ flash }}</article>{% endif %}
+
+<div class="toolbar">
+  <form method="get" action="/" class="filters">
+    <select name="status" onchange="this.form.submit()" aria-label="Status">
+      <option value="" {% if not f_status %}selected{% endif %}>All ({{ counts.values()|sum }})</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if f_status == s %}selected{% endif %}>{{ s|capitalize }} ({{ counts[s] }})</option>
+      {% endfor %}
+    </select>
+    {% if libraries|length > 1 %}
+    <select name="library" onchange="this.form.submit()" aria-label="Library">
+      <option value="">All libraries</option>
+      {% for id, name in libraries.items() %}
+      <option value="{{ id }}" {% if f_library == id %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <input type="search" name="q" value="{{ f_q }}" placeholder="Filter title / author">
+  </form>
+  <label class="rapid-toggle" title="After Download or Skip, jump to the next book and search it automatically">
+    <input type="checkbox" role="switch" id="rapid"> Rapid mode
+  </label>
+  <button hx-post="/scan" hx-indicator="#scan-spin" hx-disabled-elt="this">
+    Rescan library <span id="scan-spin" class="htmx-indicator" aria-busy="true"></span>
+  </button>
+</div>
+
+{% if not rows %}
+<article>
+  {% if counts.values()|sum == 0 %}
+    Nothing tracked yet. Click <strong>Rescan library</strong> to find audiobooks without an ebook.
+  {% else %}
+    No books match this filter.
+  {% endif %}
+</article>
+{% else %}
+<div class="layout">
+  <section class="list">
+    <table class="striped">
+      <thead><tr><th></th><th>Title</th><th>Author</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for row in rows %}{% include "_row.html" %}{% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <aside id="panel" class="panel"
+         {% if open_id %}hx-get="/book/{{ open_id }}" hx-trigger="load" hx-swap="innerHTML"{% endif %}>
+    <article class="muted">{% if open_id %}Loading…{% else %}Select a book to search for its ebook.{% endif %}</article>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}
