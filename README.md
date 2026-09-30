@@ -40,11 +40,11 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
 2. **ABS token** – ABS → Settings → Users → your admin user → copy the API token.
 3. On the server, in an empty folder, grab the two example files:
    ```bash
-   curl -o docker-compose.yml https://raw.githubusercontent.com/YOUR_GITHUB_USER/abs-ebook-filler/main/docker-compose.example.yml
-   curl -o .env https://raw.githubusercontent.com/YOUR_GITHUB_USER/abs-ebook-filler/main/.env.example
+   curl -o docker-compose.yml https://raw.githubusercontent.com/hobesman/abs-ebook-filler/main/docker-compose.example.yml
+   curl -o .env https://raw.githubusercontent.com/hobesman/abs-ebook-filler/main/.env.example
    ```
    Fill in `.env` (tokens, `WEB_PASSWORD`, `PATH_MAP`) and fix the library volume in `docker-compose.yml`.
-   The prebuilt image `ghcr.io/YOUR_GITHUB_USER/abs-ebook-filler:latest` (amd64 + arm64) is pulled automatically.
+   The prebuilt image `ghcr.io/hobesman/abs-ebook-filler:latest` (amd64 + arm64) is pulled automatically.
 
    **Updating:** `docker compose pull && docker compose up -d`
 4. **PATH_MAP** – ABS reports folders by *its* container path (e.g. `/audiobooks/Author/Book`). Mount the same
