@@ -73,6 +73,12 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   *MyAnonamouse*) with its result count. Click to hide/show that source; the choice is saved on the server
   and applies to every book, rapid mode and the CLI. Hidden sources are filtered before the top-N cut, so the
   next-best results from enabled sources fill the list. Toggling doesn't re-run the search.
+- **Pre-search** – "Pre-search the next [100] missing books" (above the list) searches books ahead of time,
+  top of the list first, skipping ones that already have results. It runs one search at a time with a short
+  pause (`PRESEARCH_DELAY`), pauses while you're searching, and waits out Anna's Archive rate-limit cooldowns
+  and retries. Books with results ready get a ⚡ and open instantly; results are kept `SEARCH_CACHE_HOURS`
+  (24 h). Every normal search is saved the same way. Start it, go do something else, then work through the
+  list in rapid mode. Also available as `abs-ebook-filler presearch --count 100` (e.g. nightly from cron).
 - **Rapid mode** (toggle on the Missing page, remembered per browser) – after **Download** or **Skip** the
   panel jumps straight to the next missing/failed book in the list and searches it. The next book's search is
   started in the background while you look at the current one, so results are usually ready when you arrive.
@@ -93,6 +99,7 @@ abs-ebook-filler scan [--library ID]
 abs-ebook-filler dry-run [--limit 5]
 abs-ebook-filler probe [--title "..."] [--author "..."] [--out file.json]
 abs-ebook-filler run [--item ID] [--limit N] [--retry-skipped]   # interactive terminal picker
+abs-ebook-filler presearch [--count 100] [--no-rescan]                  # search ahead; results shown with ⚡ in the UI
 abs-ebook-filler web
 ```
 

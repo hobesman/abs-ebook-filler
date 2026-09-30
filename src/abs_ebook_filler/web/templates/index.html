@@ -28,6 +28,8 @@
   </button>
 </div>
 
+{% if pre_missing %}{% include "_presearch.html" %}{% endif %}
+
 {% if not rows %}
 <article>
   {% if counts.values()|sum == 0 %}

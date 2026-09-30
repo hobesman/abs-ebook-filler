@@ -45,3 +45,13 @@ class SearchResult:
 
     cands: list[Candidate] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    searched_at: float | None = None  # epoch seconds; older than "now" when served from the saved-search cache
+    from_cache: bool = False
+
+    def to_data(self) -> dict[str, Any]:
+        return {"cands": [c.to_dict() for c in self.cands], "warnings": list(self.warnings)}
+
+    @classmethod
+    def from_data(cls, data: dict[str, Any], searched_at: float) -> "SearchResult":
+        return cls([Candidate(**c) for c in data.get("cands") or []], list(data.get("warnings") or []),
+                   searched_at=searched_at, from_cache=True)

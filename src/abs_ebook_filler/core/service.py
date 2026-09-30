@@ -65,9 +65,14 @@ class Service:
         shown = [c for c in good if source_key(c.source) not in disabled]
         return shown[: self.s.max_candidates], len(good) - len(shown)
 
-    async def search_all(self, item_id: str, query: str | None = None) -> SearchResult:
+    async def search_all(self, item_id: str, query: str | None = None,
+                         use_cache: bool = False) -> SearchResult:
         """Every EPUB release Shelfmark finds, scored and sorted best-first (no filtering),
-        plus any per-source failures such as a rate-limited Anna's Archive."""
+        plus any per-source failures such as a rate-limited Anna's Archive.
+
+        Every live search is saved; ``use_cache`` returns a saved result for the same query if it is
+        younger than SEARCH_CACHE_HOURS (that's how pre-searched books open instantly).
+        """
         row = self.state.get(item_id)
         if not row:
             raise KeyError(item_id)
@@ -75,6 +80,10 @@ class Service:
         if q and q != self.default_query(row):
             self.state.update(item_id, query=q)
         q = q or self.default_query(row)
+        if use_cache:
+            hit = self.state.load_search(item_id, q, self.s.search_cache_seconds)
+            if hit:
+                return SearchResult.from_data(*hit)
         # Only override Shelfmark's own title/author query building when the user edited the query.
         manual = q if q != build_query(row["clean_title"], row["author"]) else ""
 
@@ -86,6 +95,9 @@ class Service:
         for c in res.cands:
             c.score = rank(c.title, c.author)
         res.cands.sort(key=lambda c: (c.score, c.popularity), reverse=True)
+        res.searched_at = time.time()
+        self.state.save_search(item_id, q, res.to_data(), complete=not res.warnings,
+                               max_age=self.s.search_cache_seconds)
         return res
 
     # ---- skipping ----------------------------------------------------------------

@@ -25,7 +25,7 @@ def _service() -> Service:
 
 async def _search(svc: Service, item_id: str, query: str | None = None):
     """Search, print any per-source failures (e.g. a rate-limited Anna's Archive), return what to show."""
-    res = await svc.search_all(item_id, query)
+    res = await svc.search_all(item_id, query, use_cache=True)  # reuse pre-searched results
     for w in res.warnings:
         console.print(f"[yellow]⚠ {w}[/]")
     return svc.select(res.cands)[0]
@@ -186,6 +186,42 @@ def run(item: Optional[str] = typer.Option(None, help="Only this ABS item id"),
                             console.print(f"[red]Failed:[/] {e}")
                     break
             console.print(f"\nDone. {done} ebook(s) added.")
+        finally:
+            await svc.aclose()
+    asyncio.run(go())
+
+
+@app.command()
+def presearch(count: int = typer.Option(100, help="How many missing books to search ahead"),
+              rescan: bool = typer.Option(True, help="Rescan ABS first")):
+    """Search the next N missing books in the background so they open instantly in the web UI.
+
+    Safe to run from cron while the web UI is up (results go to the shared database).
+    """
+    from .core.presearch import PreSearcher
+
+    async def go():
+        svc = _service()
+        try:
+            if rescan:
+                with console.status("Scanning Audiobookshelf…"):
+                    await svc.scan()
+            pre = PreSearcher(svc)
+            targets = pre.targets(count)
+            if not targets:
+                console.print("Every missing book already has saved results.")
+                return
+            console.print(f"Pre-searching {len(targets)} book(s), one at a time…")
+            task = asyncio.create_task(pre.run(targets))
+            with console.status("") as st:
+                while not task.done():
+                    s = pre.status.to_dict()
+                    extra = (f"waiting ~{s['cooldown_left']}s for rate-limit cooldown" if s["cooldown_left"]
+                             else s["current"])
+                    st.update(f"{s['done']}/{s['total']} {extra}")
+                    await asyncio.sleep(1)
+            s = await task
+            console.print(f"Done: {s.done} searched, {s.failed} failed, {s.partial} incomplete.")
         finally:
             await svc.aclose()
     asyncio.run(go())

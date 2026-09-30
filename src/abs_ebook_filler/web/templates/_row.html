@@ -4,7 +4,8 @@
   <td class="thumb"><img src="/cover/{{ row.item_id }}" alt="Cover" loading="lazy" class="zoomable"
                          data-zoom="/cover/{{ row.item_id }}?width=0" onerror="this.style.visibility='hidden'"></td>
   <td class="clickable" hx-get="/book/{{ row.item_id }}" hx-target="#panel" hx-swap="innerHTML" hx-trigger="click">
-    <div class="t">{{ row.clean_title }}</div>
+    <div class="t">{{ row.clean_title }}{% if ready and row.item_id in ready and row.status in ("missing", "failed") %}
+      <span class="ready" title="Search results ready">⚡</span>{% endif %}</div>
     {% if row.clean_title != row.title %}<small class="muted">{{ row.title }}</small>{% endif %}
   </td>
   <td>{{ row.author }}</td>

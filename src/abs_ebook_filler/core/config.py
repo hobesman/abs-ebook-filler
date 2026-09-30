@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     search_timeout: float = 330.0
     # Max release searches at once. Keep at 1: Anna's Archive rate-limits (429) parallel searches.
     search_concurrency: int = 1
+    # Saved search results (pre-search and normal searches) are reused for this long.
+    search_cache_hours: float = 24.0
+    # Pre-search: pause between books, and how many books the web UI offers by default.
+    presearch_delay: float = 5.0
+    presearch_count: int = 100
+
+    @property
+    def search_cache_seconds(self) -> float:
+        return self.search_cache_hours * 3600
 
     # Web
     web_user: str = "admin"

@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..core.config import Settings, get_settings
 from ..core.models import SearchResult
+from ..core.presearch import PreSearcher, is_rate_limit
 from ..core.service import Service
 from ..core.shelfmark_client import ShelfmarkError
 from ..core.state import STATUSES, source_key
@@ -28,12 +29,19 @@ log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 security = HTTPBasic(realm="abs-ebook-filler")
-SEARCH_CACHE_SECONDS = 15 * 60
+SEARCH_CACHE_SECONDS = 15 * 60  # in-memory task reuse; saved results in SQLite last SEARCH_CACHE_HOURS
 
 
-def _is_rate_limit(msg: str) -> bool:
-    m = (msg or "").lower()
-    return "429" in m or "rate-limit" in m or "rate limit" in m or "cooldown" in m
+def _ago(ts: float | None) -> str:
+    """'3 min' / '2 h' for results older than a minute, else ''."""
+    if not ts:
+        return ""
+    secs = time.time() - ts
+    if secs < 60:
+        return ""
+    if secs < 3600:
+        return f"{int(secs // 60)} min"
+    return f"{secs / 3600:.0f} h"
 
 
 def create_app(settings: Settings | None = None, service: Service | None = None) -> FastAPI:
@@ -49,6 +57,10 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         app.state.worker = worker
         app.state.cands = {}  # item_id -> list[Candidate] from the last search
         app.state.searches = {}  # item_id -> (query, started_at, asyncio.Task) for prefetch/reuse
+        # Interactive searches (panel loads, rapid prefetch) are the tasks in app.state.searches;
+        # pre-search waits while any of them is running.
+        app.state.presearch = PreSearcher(
+            svc, is_busy=lambda: any(not t.done() for _, _, t in app.state.searches.values()))
         app.state.libraries = {}
         try:
             app.state.libraries = {l["id"]: l.get("name", l["id"]) for l in await svc.abs.libraries()}
@@ -58,6 +70,8 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         try:
             yield
         finally:
+            app.state.presearch.stop()
+            await app.state.presearch.wait()
             for _, _, task in app.state.searches.values():
                 task.cancel()
             await worker.stop()
@@ -87,6 +101,10 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     def ctx(request: Request, **kw):
         return {"request": request, "libraries": request.app.state.libraries, **kw}
 
+    def _ready(s: Service) -> set[str]:
+        """Books with saved search results, marked ⚡ in the list."""
+        return s.state.searched_ids(s.s.search_cache_seconds)
+
     # ---- missing books -----------------------------------------------------------
     @r.get("/", response_class=HTMLResponse)
     async def index(request: Request, status: str = "missing", library: str = "", q: str = "",
@@ -97,7 +115,36 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         open_id = open if open and s.state.get(open) else ""
         return templates.TemplateResponse(request, "index.html", ctx(
             request, rows=rows, counts=s.state.counts(), statuses=STATUSES,
-            f_status=status, f_library=library, f_q=q, flash=flash, open_id=open_id))
+            f_status=status, f_library=library, f_q=q, flash=flash, open_id=open_id,
+            ready=_ready(s), **_presearch_ctx(request)))
+
+    # ---- pre-search --------------------------------------------------------------
+    def _presearch_ctx(request: Request) -> dict:
+        s = svc(request)
+        ready = s.state.searched_ids(s.s.search_cache_seconds, complete_only=True)
+        missing = {r["item_id"] for r in s.state.list(status="missing")}
+        return {"pre": request.app.state.presearch.status.to_dict(),
+                "pre_ready": len(ready & missing), "pre_missing": len(missing),
+                "pre_default": s.s.presearch_count, "cache_hours": s.s.search_cache_hours}
+
+    def _presearch_fragment(request: Request):
+        return templates.TemplateResponse(request, "_presearch.html", ctx(request, **_presearch_ctx(request)))
+
+    @r.post("/presearch", response_class=HTMLResponse)
+    async def presearch_start(request: Request, count: int = Form(100)):
+        request.app.state.presearch.start(max(1, min(count, 2000)))
+        return _presearch_fragment(request)
+
+    @r.post("/presearch/stop", response_class=HTMLResponse)
+    async def presearch_stop(request: Request):
+        pre = request.app.state.presearch
+        pre.stop()
+        await pre.wait()
+        return _presearch_fragment(request)
+
+    @r.get("/presearch/status", response_class=HTMLResponse)
+    async def presearch_status(request: Request):
+        return _presearch_fragment(request)
 
     @r.post("/scan")
     async def scan(request: Request):
@@ -155,7 +202,8 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
             if not fresh and not t.cancelled() and t.exception() is None:
                 return t
         # Cache the unfiltered list so source toggles can re-filter without searching again.
-        task = asyncio.create_task(s.search_all(item_id, q or None))
+        # Unless this is an explicit Search click, a saved (e.g. pre-searched) result is used as-is.
+        task = asyncio.create_task(s.search_all(item_id, q or None, use_cache=not fresh))
         task.add_done_callback(lambda t: t.cancelled() or t.exception())  # silence "never retrieved"
         searches[item_id] = (q, now, task)
         return task
@@ -195,7 +243,8 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         request.app.state.cands[item_id] = cands  # download buttons index into this list
         return templates.TemplateResponse(request, "_candidates.html", ctx(
             request, item_id=item_id, cands=cands, error=error, hidden=hidden,
-            warnings=res.warnings, rate_limited=any(_is_rate_limit(w) for w in [*res.warnings, error]),
+            warnings=res.warnings, rate_limited=any(is_rate_limit(w) for w in [*res.warnings, error]),
+            searched_ago=_ago(res.searched_at) if res.from_cache else "",
             sources=_source_chips(s, res.cands)))
 
     @r.post("/book/{item_id}/sources", response_class=HTMLResponse)
@@ -235,7 +284,8 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         row = svc(request).state.get(item_id)
         if not row:
             return HTMLResponse("")
-        return templates.TemplateResponse(request, "_row.html", ctx(request, row=row))
+        return templates.TemplateResponse(request, "_row.html", ctx(request, row=row,
+                                                                    ready=_ready(svc(request))))
 
     # ---- activity ----------------------------------------------------------------
     @r.get("/activity", response_class=HTMLResponse)

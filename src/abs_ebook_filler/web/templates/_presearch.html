@@ -1,0 +1,32 @@
+<div id="presearch" class="presearch"
+     {% if pre.running %}hx-get="/presearch/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  {% if pre.running %}
+    <span aria-busy="true"></span>
+    <span>
+      <strong>Pre-searching {{ pre.done }}/{{ pre.total }}</strong>
+      {% if pre.cooldown_left %}
+        · <span class="muted">waiting ~{{ pre.cooldown_left }}s for Anna's Archive's rate-limit cooldown</span>
+      {% elif pre.current %}
+        · <span class="muted">{{ pre.current }}</span>
+      {% endif %}
+      {% if pre.failed or pre.partial %}
+        · <small class="muted">{{ pre.failed }} failed, {{ pre.partial }} incomplete</small>
+      {% endif %}
+    </span>
+    <progress value="{{ pre.done }}" max="{{ pre.total }}"></progress>
+    <button class="small secondary outline" hx-post="/presearch/stop" hx-target="#presearch"
+            hx-swap="outerHTML">Stop</button>
+  {% else %}
+    <form hx-post="/presearch" hx-target="#presearch" hx-swap="outerHTML"
+          title="Search books ahead of time, one at a time, so they open instantly in rapid mode. Results are kept {{ cache_hours|round|int }} h.">
+      <span>Pre-search the next</span>
+      <input type="number" name="count" value="{{ pre_default }}" min="1" max="2000" aria-label="Number of books">
+      <span>missing books</span>
+      <button type="submit" class="small">Start</button>
+    </form>
+    <small class="muted">
+      ⚡ {{ pre_ready }} of {{ pre_missing }} missing books have results ready
+      {% if pre.message %} · {{ pre.message }}{% if pre.failed or pre.partial %} ({{ pre.failed }} failed, {{ pre.partial }} incomplete){% endif %}{% endif %}
+    </small>
+  {% endif %}
+</div>

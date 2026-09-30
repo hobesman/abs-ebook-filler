@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS prefs (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS search_cache (
+    item_id    TEXT NOT NULL,
+    query      TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    complete   INTEGER NOT NULL,   -- 0 when a source failed (e.g. rate-limited) -> results may be partial
+    data       TEXT NOT NULL,      -- {"cands": [...], "warnings": [...]}
+    PRIMARY KEY (item_id, query)
+);
 """
 
 
@@ -159,6 +167,38 @@ class State:
             (json.dumps(sorted(disabled)),),
         )
         return disabled
+
+    # ---- saved search results (pre-search / reuse across restarts) ----------------
+    def save_search(self, item_id: str, query: str, data: dict[str, Any], complete: bool,
+                    max_age: float | None = None) -> None:
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO search_cache (item_id, query, created_at, complete, data) VALUES (?,?,?,?,?)
+                   ON CONFLICT(item_id, query) DO UPDATE SET
+                     created_at=excluded.created_at, complete=excluded.complete, data=excluded.data""",
+                (item_id, query, now, int(complete), json.dumps(data)),
+            )
+            if max_age:
+                self._conn.execute("DELETE FROM search_cache WHERE created_at < ?", (now - max_age,))
+            self._conn.commit()
+
+    def load_search(self, item_id: str, query: str, max_age: float) -> tuple[dict[str, Any], float] | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT data, created_at FROM search_cache WHERE item_id=? AND query=? AND created_at >= ?",
+                (item_id, query, time.time() - max_age),
+            ).fetchone()
+        return (json.loads(r[0]), r[1]) if r else None
+
+    def searched_ids(self, max_age: float, complete_only: bool = False) -> set[str]:
+        """Items with saved search results newer than ``max_age`` seconds."""
+        sql = "SELECT DISTINCT item_id FROM search_cache WHERE created_at >= ?"
+        if complete_only:
+            sql += " AND complete=1"
+        with self._lock:
+            rows = self._conn.execute(sql, (time.time() - max_age,)).fetchall()
+        return {r[0] for r in rows}
 
     # ---- writes ------------------------------------------------------------------
     def update(self, item_id: str, **fields: Any) -> None:
