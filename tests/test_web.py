@@ -49,7 +49,8 @@ def test_failed_book_retry_unmatch_and_search_again(settings, service):
     mock_abs()
     mock_shelfmark()
     app = create_app(settings, service)
-    with TestClient(app, auth=("admin", "pw")) as c:
+    with TestClient(app) as c:
+        c.auth = ("admin", "pw")  # TestClient() doesn't take auth=; set it on the client
         c.post("/scan")
         service.state.update("li_1", status="failed", release=REL, message="No mirrors")
 
@@ -85,7 +86,8 @@ def test_prefetch_is_reused_and_full_size_cover(settings, service):
         return_value=httpx.Response(200, json={"releases": [REL]}))
     cover = respx.get("http://abs/api/items/li_1/cover").mock(return_value=httpx.Response(200, content=b"big"))
     app = create_app(settings, service)
-    with TestClient(app, auth=("admin", "pw")) as c:
+    with TestClient(app) as c:
+        c.auth = ("admin", "pw")  # TestClient() doesn't take auth=; set it on the client
         c.post("/scan")
         assert c.post("/book/li_1/prefetch").status_code == 204
         assert "Download" in c.get("/book/li_1/candidates").text
