@@ -9,15 +9,17 @@
   <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
 </head>
 <body>
-  <header class="container-fluid topbar">
+  {% set path = request.url.path %}
+  <header class="container-fluid topbar" id="topbar">
     <nav>
       <ul><li><strong>📚 Ebook Filler</strong></li></ul>
       <ul>
-        <li><a href="/">Missing</a></li>
-        <li><a href="/activity">Activity</a></li>
-        <li><a href="/settings">Settings</a></li>
+        <li><a href="/" {% if path == "/" %}aria-current="page"{% endif %}>Books</a></li>
+        <li><a href="/activity" {% if path.startswith("/activity") %}aria-current="page"{% endif %}>Activity</a></li>
+        <li><a href="/settings" {% if path.startswith("/settings") %}aria-current="page"{% endif %}>Settings</a></li>
       </ul>
     </nav>
+    {% block topbar_extra %}{% endblock %}
   </header>
   <main class="container-fluid">
     {% block content %}{% endblock %}

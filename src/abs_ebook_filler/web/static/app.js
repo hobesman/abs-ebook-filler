@@ -2,6 +2,17 @@
 (function () {
   "use strict";
 
+  // ---------- sticky top bar height ----------
+  // The bar's height changes (filters wrap, pre-search progress appears), so keep --topbar-h in sync;
+  // the sticky book panel and scroll offsets use it to stay clear of the bar.
+  const topbar = document.getElementById("topbar");
+  if (topbar) {
+    const setH = () => document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
+    setH();
+    if ("ResizeObserver" in window) new ResizeObserver(setH).observe(topbar);
+    else window.addEventListener("resize", setH);
+  }
+
   // ---------- cover lightbox ----------
   const lightbox = document.getElementById("lightbox");
   document.addEventListener("click", (e) => {

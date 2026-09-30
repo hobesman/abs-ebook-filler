@@ -66,7 +66,9 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
 
 ## Using the web UI
 
-- **Missing** – every audiobook without an ebook. Click a title to open its panel: Shelfmark is searched
+- **Books** – your tracked audiobooks; the status dropdown defaults to *Missing* (no ebook yet) and can show
+  queued, done, skipped, failed or all. The top bar (with the filters and pre-search) stays pinned while you
+  scroll. Click a title to open its panel: Shelfmark is searched
   automatically with the cleaned title + author. Edit the query and search again if needed, then **Download** a
   release, or **Skip** the book (skipped books stay hidden until you un-skip them).
 - **Source toggles** – above the results, one button per source/indexer (e.g. *Direct Download*,
@@ -79,13 +81,13 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   and retries. Books with results ready get a ⚡ and open instantly; results are kept `SEARCH_CACHE_HOURS`
   (24 h). Every normal search is saved the same way. Start it, go do something else, then work through the
   list in rapid mode. Also available as `abs-ebook-filler presearch --count 100` (e.g. nightly from cron).
-- **Rapid mode** (toggle on the Missing page, remembered per browser) – after **Download** or **Skip** the
+- **Rapid mode** (toggle on the Books page, remembered per browser) – after **Download** or **Skip** the
   panel jumps straight to the next missing/failed book in the list and searches it. The next book's search is
   started in the background while you look at the current one, so results are usually ready when you arrive.
 - Click any cover to see it full size (click again or press Esc to close).
 - **Activity** – live progress for queued downloads, recent successes and failures. A failed download offers
   **Retry** (same release), **Search again** (unmatch and jump to that book's search to pick a different
-  release) and **Unmatch** (forget the release and put the book back in the Missing list). The same Retry /
+  release) and **Unmatch** (forget the release and mark the book missing again on the Books page). The same Retry /
   Unmatch buttons appear in a failed book's panel, above its search results.
 - **Settings** – current config (secrets hidden) and a connection test.
 

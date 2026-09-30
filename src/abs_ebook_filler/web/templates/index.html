@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block content %}
-{% if flash %}<article class="flash">{{ flash }}</article>{% endif %}
+{% block title %}Books · Ebook Filler{% endblock %}
 
+{% block topbar_extra %}
 <div class="toolbar">
   <form method="get" action="/" class="filters">
     <select name="status" onchange="this.form.submit()" aria-label="Status">
@@ -29,6 +29,10 @@
 </div>
 
 {% if pre_missing %}{% include "_presearch.html" %}{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if flash %}<article class="flash">{{ flash }}</article>{% endif %}
 
 {% if not rows %}
 <article>

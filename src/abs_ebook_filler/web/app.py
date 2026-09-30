@@ -344,7 +344,7 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
 
     @r.post("/book/{item_id}/research")
     async def research(request: Request, item_id: str):
-        """Unmatch, then open the Missing list with this book's search panel open."""
+        """Unmatch, then open the Books page (missing filter) with this book's search panel open."""
         _unmatch(request, item_id)
         return RedirectResponse("/?" + urlencode({"status": "missing", "open": item_id}), status_code=303)
 
