@@ -118,7 +118,8 @@ class Service:
 
     # ---- download + place --------------------------------------------------------
     def enqueue(self, item_id: str, release: dict[str, Any]) -> None:
-        self.state.update(item_id, status="queued", release=release, progress=None, message="Queued")
+        self.state.update(item_id, status="queued", release=release, progress=None, message="Queued",
+                          queued_at=time.time())
 
     async def process(self, item_id: str, on_progress: ProgressCb | None = None) -> Path:
         """Download the chosen release for an item and place it next to the audio files."""

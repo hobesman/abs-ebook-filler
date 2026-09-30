@@ -60,7 +60,15 @@ class State:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(items)")}
+        if "queued_at" not in cols:
+            # When the book entered the download queue; keeps the Activity list in queue order.
+            self._conn.execute("ALTER TABLE items ADD COLUMN queued_at REAL")
 
     def close(self) -> None:
         self._conn.close()
@@ -132,9 +140,15 @@ class State:
         return [self._row(r) for r in rows]
 
     def active(self) -> list[dict[str, Any]]:
+        """Queue in processing order: whatever is downloading first, then the rest as queued.
+
+        Deliberately not ordered by updated_at, which changes on every progress update.
+        """
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM items WHERE status IN ('queued','downloading') ORDER BY updated_at").fetchall()
+                """SELECT * FROM items WHERE status IN ('queued','downloading')
+                   ORDER BY CASE status WHEN 'downloading' THEN 0 ELSE 1 END,
+                            COALESCE(queued_at, created_at), item_id""").fetchall()
         return [self._row(r) for r in rows]
 
     def recent(self, limit: int = 25) -> list[dict[str, Any]]:

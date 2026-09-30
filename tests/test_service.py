@@ -85,6 +85,27 @@ async def test_rescan_drops_items_that_got_an_ebook_but_keeps_done(service):
 
 
 @respx.mock
+async def test_activity_queue_order_is_stable(service):
+    items = [{**ITEM, "id": f"li_{n}", "path": f"/audiobooks/B/{n}",
+              "media": {**ITEM["media"], "metadata": {"title": f"Book {n}", "authorName": "A"}}}
+             for n in (1, 2, 3)]
+    respx.get("http://abs/api/libraries").mock(return_value=httpx.Response(
+        200, json={"libraries": [{"id": "lib1", "mediaType": "book"}]}))
+    respx.get("http://abs/api/libraries/lib1/items").mock(return_value=httpx.Response(
+        200, json={"results": items, "total": 3}))
+    await service.scan()
+    for n in (1, 2, 3):
+        service.enqueue(f"li_{n}", REL)
+    order = lambda: [r["item_id"] for r in service.state.active()]  # noqa: E731
+    assert order() == ["li_1", "li_2", "li_3"]
+    # Book 2 starts downloading and keeps getting progress updates: it's on top, the rest stay in order.
+    service.state.update("li_2", status="downloading", progress=10)
+    service.state.update("li_1", message="still queued")  # touching updated_at must not reorder
+    service.state.update("li_2", progress=50, message="Downloading")
+    assert order() == ["li_2", "li_1", "li_3"]
+
+
+@respx.mock
 async def test_unmatch_after_failure(service):
     mock_abs()
     await service.scan()

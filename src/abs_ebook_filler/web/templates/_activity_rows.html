@@ -2,47 +2,57 @@
 {% if not active %}
   <p class="muted">Nothing downloading.</p>
 {% else %}
-<table>
+<div class="overflow-auto">
+<table class="activity">
+  <colgroup>
+    <col class="c-book"><col class="c-status"><col class="c-progress"><col>
+  </colgroup>
   <thead><tr><th>Book</th><th>Status</th><th>Progress</th><th>Detail</th></tr></thead>
   <tbody>
   {% for r in active %}
-    <tr>
+    <tr {% if r.status == "downloading" %}class="current"{% endif %}>
       <td>{{ r.clean_title }}<br><small class="muted">{{ r.author }}</small></td>
       <td><span class="badge st-{{ r.status }}">{{ r.status }}</span></td>
-      <td>{% if r.progress is not none %}<progress value="{{ r.progress }}" max="100"></progress>{% else %}<progress></progress>{% endif %}</td>
-      <td><small>{{ r.message }}</small></td>
+      <td>{% if r.status == "downloading" %}{% if r.progress is not none %}<progress value="{{ r.progress }}" max="100"></progress>{% else %}<progress></progress>{% endif %}{% endif %}</td>
+      <td class="detail" title="{{ r.message }}"><small>{{ r.message }}</small></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 <h3>Recent</h3>
 {% if not recent %}
   <p class="muted">No finished downloads yet.</p>
 {% else %}
-<table>
+<div class="overflow-auto">
+<table class="activity">
+  <colgroup>
+    <col class="c-book"><col class="c-status"><col><col class="c-actions">
+  </colgroup>
   <thead><tr><th>Book</th><th>Status</th><th>Detail</th><th></th></tr></thead>
   <tbody>
   {% for r in recent %}
     <tr>
       <td>{{ r.clean_title }}<br><small class="muted">{{ r.author }}</small></td>
       <td><span class="badge st-{{ r.status }}">{{ r.status }}</span></td>
-      <td><small>{{ r.message }}</small></td>
+      <td class="detail" title="{{ r.message }}"><small>{{ r.message }}</small></td>
       <td class="row-actions">{% if r.status == "failed" %}
         {% if r.release %}
-        <button class="small" hx-post="/retry/{{ r.item_id }}" hx-target="closest div"
+        <button class="small" hx-post="/retry/{{ r.item_id }}" hx-target="closest div.activity-live"
                 title="Try the same release again">Retry</button>
         {% endif %}
         <form method="post" action="/book/{{ r.item_id }}/research">
           <button class="small secondary" type="submit"
                   title="Unmatch and open this book's search to pick a different release">Search again</button>
         </form>
-        <button class="small secondary outline" hx-post="/unmatch/{{ r.item_id }}" hx-target="closest div"
+        <button class="small secondary outline" hx-post="/unmatch/{{ r.item_id }}" hx-target="closest div.activity-live"
                 title="Forget this release and mark the book missing again on the Books page">Unmatch</button>
       {% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
