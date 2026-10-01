@@ -186,6 +186,11 @@ def test_activity_page_count_controls_and_reorder(settings, service, library):
     service.pause(30)  # keep the worker from picking anything up during the test
     for n in ("a1", "a2", "a3"):
         service.enqueue(n, rel(n))
+    # Once resumed (last step) the worker starts these books: let them sit in Shelfmark's queue.
+    respx.post("http://sm/api/releases/download").mock(return_value=httpx.Response(200, json={"status": "queued"}))
+    respx.get("http://sm/api/status").mock(return_value=httpx.Response(
+        200, json={"queued": {n: {"status": "queued"} for n in ("a1", "a2", "a3")}}))
+    service.s = settings.model_copy(update={"poll_interval": 0.05})
     app = create_app(settings, service)
     with TestClient(app) as c:
         c.auth = ("admin", "pw")
@@ -202,14 +207,16 @@ def test_activity_page_count_controls_and_reorder(settings, service, library):
         order = [r["item_id"] for r in service.state.active() if r["status"] == "queued"]
         assert order == ["a2", "a3"]
 
-        ctl = c.post("/resume").text
-        assert "Pause processing for" in ctl and not service.paused()
-        ctl = c.post("/pause", data={"minutes": "5"}).text
-        assert "Resume now" in ctl and service.paused()
-
+        # Auto-retry while still paused, so nothing else changes state underneath it.
         service.state.update("a2", status="failed", message="flaky mirror")
         ctl = c.post("/autoretry", data={"enabled": "true"}).text
         assert "checked" in ctl and "re-queued 1" in ctl
         assert service.state.get("a2")["status"] == "queued"
         ctl = c.post("/autoretry").text  # unchecked switch sends nothing
         assert not app.state.autoretry.enabled
+
+        # Pause controls last: resuming lets the worker start books (they park in Shelfmark's queue).
+        ctl = c.post("/resume").text
+        assert "Pause processing for" in ctl and not service.paused()
+        ctl = c.post("/pause", data={"minutes": "5"}).text
+        assert "Resume now" in ctl and service.paused()
