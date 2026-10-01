@@ -14,7 +14,8 @@ from .config import Settings
 from .matching import build_query, primary_author, score
 from .models import Book, Candidate, SearchResult
 from .ratelimit import rate_limit_wait
-from .shelfmark_client import QUEUED_STATES, ShelfmarkClient, ShelfmarkError, release_format
+from .shelfmark_client import (QUEUED_STATES, ShelfmarkClient, ShelfmarkError, ShelfmarkUnreachable,
+                               TaskLostError, release_format)
 from .state import State, source_key
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class Service:
         self.state = state or State(Path(settings.data_dir) / "state.db")
         self.abs = abs_client or ABSClient(settings.abs_url, settings.abs_token, settings.http_timeout)
         self._sleep = asyncio.sleep  # swapped out in tests to skip real cooldown waits
+        self._paused_until = float(self.state.get_pref("paused_until", 0) or 0)
         self.sm = shelfmark or ShelfmarkClient(
             settings.shelfmark_url, settings.shelfmark_api_key, settings.http_timeout,
             search_timeout=settings.search_timeout, search_concurrency=settings.search_concurrency)
@@ -119,6 +121,34 @@ class Service:
             raise ValueError(f"Can't unmatch a book that is {row['status']}")
         self.state.update(item_id, status="missing", release=None, progress=None, message="")
 
+    # ---- pause processing (e.g. while Shelfmark restarts) -------------------------
+    def paused_until(self) -> float:
+        return self._paused_until
+
+    def paused(self) -> bool:
+        return time.time() < self._paused_until
+
+    def pause_left(self) -> float:
+        return max(0.0, self._paused_until - time.time())
+
+    def pause_left_text(self) -> str:
+        secs = self.pause_left()
+        return f"{int(secs)}s" if secs < 60 else f"{secs / 60:.0f} min"
+
+    def pause(self, minutes: float) -> float:
+        self._paused_until = time.time() + max(0.0, minutes) * 60
+        self.state.set_pref("paused_until", self._paused_until)
+        return self._paused_until
+
+    def resume(self) -> None:
+        self._paused_until = 0.0
+        self.state.set_pref("paused_until", 0)
+
+    async def _wait_while_paused(self, item_id: str) -> None:
+        while self.paused():
+            self.state.update(item_id, message=f"Paused, resumes in {self.pause_left_text()}")
+            await self._sleep(min(5.0, max(0.05, self.pause_left())))
+
     # ---- download + place --------------------------------------------------------
     def enqueue(self, item_id: str, release: dict[str, Any]) -> None:
         self.state.update(item_id, status="queued", release=release, progress=None, message="Queued",
@@ -129,7 +159,11 @@ class Service:
         """Queue in Shelfmark and wait; re-queue after a rate-limit cooldown (RATE_LIMIT_RETRIES)."""
 
         async def progress(state: str, pct: float | None, msg: str) -> None:
-            if state in QUEUED_STATES:
+            if state == "paused":
+                self.state.update(item_id, message=f"Paused, resumes in {self.pause_left_text()}")
+            elif state == "unreachable":
+                self.state.update(item_id, message="Shelfmark unreachable, retrying")
+            elif state in QUEUED_STATES:
                 # Parked behind other downloads in Shelfmark's own queue: still "queued" to us too.
                 self.state.update(item_id, status="queued", progress=None,
                                   message="Waiting in Shelfmark's queue")
@@ -142,15 +176,34 @@ class Service:
             if on_progress:
                 on_progress(state, pct, msg)
 
-        attempt = 0
+        attempt = lost = 0
+        unreachable_since: float | None = None
+        sending = "Sending to Shelfmark"
         while True:
             try:
-                self.state.update(item_id, status="downloading", progress=None, message="Sending to Shelfmark")
+                await self._wait_while_paused(item_id)
+                self.state.update(item_id, status="downloading", progress=None, message=sending)
                 task_id = await self.sm.queue_download(release)
+                unreachable_since = None
                 task = await self.sm.wait_for(
                     task_id, self.s.download_timeout, self.s.poll_interval, progress,
-                    queue_timeout=self.s.queue_wait_timeout)
+                    queue_timeout=self.s.queue_wait_timeout, hold=self.paused, grace=self.s.shelfmark_grace)
                 return task_id, task
+            except TaskLostError:
+                # Shelfmark restarted and forgot it (its queue lives in memory): send it again.
+                lost += 1
+                if lost > self.s.lost_task_resends:
+                    raise
+                sending = "Re-sent to Shelfmark after it lost the download"
+            except ShelfmarkUnreachable:
+                # Couldn't even hand it over (Shelfmark down, no pause set): keep trying for the grace period.
+                now = time.monotonic()
+                unreachable_since = unreachable_since or now
+                if now - unreachable_since > self.s.shelfmark_grace:
+                    raise
+                self.state.update(item_id, status="queued", progress=None,
+                                  message="Shelfmark unreachable, retrying")
+                await self._sleep(min(10.0, max(1.0, self.s.poll_interval)))
             except ShelfmarkError as e:
                 wait = rate_limit_wait([str(e)])
                 if wait is None or attempt >= self.s.rate_limit_retries:

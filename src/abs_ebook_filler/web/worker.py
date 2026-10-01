@@ -27,6 +27,7 @@ class Worker:
         self._idle = asyncio.Event()
         self._idle.set()
         self._tasks: list[asyncio.Task] = []
+        self._wake: asyncio.TimerHandle | None = None  # fires when a pause ends
 
     async def start(self) -> None:
         # Resume anything left over from a previous run (State.active() is already in queue order).
@@ -36,12 +37,45 @@ class Worker:
                 self.submit(row["item_id"])
             else:
                 self.service.state.update(row["item_id"], status="missing", message="")
+        if self.service.paused():  # a pause set before a restart still applies
+            self._schedule_wake()
         self._tasks = [asyncio.create_task(self._run(i)) for i in range(self.concurrency)]
 
     async def stop(self) -> None:
+        if self._wake:
+            self._wake.cancel()
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    # ---- pause / resume ------------------------------------------------------------
+    def pause(self, minutes: float) -> None:
+        """Start no new downloads for ``minutes``; running ones hold off contacting Shelfmark."""
+        self.service.pause(minutes)
+        self._schedule_wake()
+
+    def resume(self) -> None:
+        self.service.resume()
+        if self._wake:
+            self._wake.cancel()
+            self._wake = None
+        self._changed.set()
+
+    def _schedule_wake(self) -> None:
+        if self._wake:
+            self._wake.cancel()
+        self._wake = asyncio.get_running_loop().call_later(
+            self.service.pause_left() + 0.5, self._changed.set)
+
+    # ---- queue order ---------------------------------------------------------------
+    def claimed_ids(self) -> set[str]:
+        """Books a worker has started (downloading, or waiting in Shelfmark's own queue)."""
+        return set(self._running)
+
+    def reorder(self, item_ids: list[str]) -> None:
+        """Make the waiting list follow this order; books not listed keep their relative place after."""
+        rank = {item_id: n for n, item_id in enumerate(item_ids)}
+        self._waiting.sort(key=lambda i: rank.get(i, len(rank)))
 
     async def drain(self) -> None:
         """Wait until nothing is queued or running (used by tests)."""
@@ -62,6 +96,8 @@ class Worker:
 
     def _claim(self) -> str | None:
         """Next waiting book whose source has a free slot. No awaits: atomic within the event loop."""
+        if self.service.paused():
+            return None
         busy = self.running_by_source()
         for i, item_id in enumerate(self._waiting):
             src = self._source[item_id]

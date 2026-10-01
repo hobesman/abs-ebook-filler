@@ -1,0 +1,31 @@
+<div id="activity-controls" class="activity-controls"
+     hx-get="/activity/controls" hx-trigger="every 15s[!this.contains(document.activeElement)]" hx-swap="outerHTML">
+  <div class="ctl">
+    <label class="rapid-toggle"
+           title="Put every failed download back in the queue now, then every {{ ar_minutes }} minutes until switched off. Skips failures a retry can't fix (file already exists, folder not found).">
+      <input type="checkbox" role="switch" name="enabled" value="true" {% if ar_enabled %}checked{% endif %}
+             hx-post="/autoretry" hx-target="#activity-controls" hx-swap="outerHTML">
+      Auto-retry failed downloads every {{ ar_minutes }} min
+    </label>
+    <small class="muted">
+      {% if ar_last_ago %}Last run {{ ar_last_ago }}{% if ar_last_ago != "just now" %} ago{% endif %}: re-queued {{ ar_last_count }}{% endif %}
+      {% if ar_enabled and ar_next_in %}{% if ar_last_ago %} · {% endif %}next {% if ar_next_in == "now" %}any moment{% else %}in {{ ar_next_in }}{% endif %}{% endif %}
+      {% if ar_enabled and paused %} · waits while paused{% endif %}
+    </small>
+  </div>
+
+  <div class="ctl">
+    {% if paused %}
+      <span class="paused-note">⏸ Processing paused, resumes in {{ pause_left }}</span>
+      <button class="small" hx-post="/resume" hx-target="#activity-controls" hx-swap="outerHTML">Resume now</button>
+    {% else %}
+      <form hx-post="/pause" hx-target="#activity-controls" hx-swap="outerHTML"
+            title="Start no new downloads and stop contacting Shelfmark, e.g. while it restarts. Downloads in progress wait and pick up (or are re-sent) afterwards.">
+        <span>Pause processing for</span>
+        <input type="number" name="minutes" value="10" min="1" max="240" aria-label="Minutes to pause">
+        <span>minutes</span>
+        <button type="submit" class="small secondary">Pause</button>
+      </form>
+    {% endif %}
+  </div>
+</div>

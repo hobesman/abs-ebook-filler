@@ -15,7 +15,8 @@
       <ul><li><strong>📚 Ebook Filler</strong></li></ul>
       <ul>
         <li><a href="/" {% if path == "/" %}aria-current="page"{% endif %}>Books</a></li>
-        <li><a href="/activity" {% if path.startswith("/activity") %}aria-current="page"{% endif %}>Activity</a></li>
+        <li><a href="/activity" {% if path.startswith("/activity") %}aria-current="page"{% endif %}>Activity{% if paused %}
+          <span class="paused-badge" title="Processing paused, resumes in {{ pause_left }}">⏸</span>{% endif %}</a></li>
         <li><a href="/settings" {% if path.startswith("/settings") %}aria-current="page"{% endif %}>Settings</a></li>
       </ul>
     </nav>
@@ -28,6 +29,7 @@
     <img alt="Cover (full size)">
   </dialog>
   <div id="toast" role="status" aria-live="polite"></div>
+  {% block scripts %}{% endblock %}
   <script src="/static/app.js" defer></script>
 </body>
 </html>

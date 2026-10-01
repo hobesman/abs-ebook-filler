@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Activity · Ebook Filler{% endblock %}
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js" defer></script>
+{% endblock %}
 {% block content %}
+{% include "_activity_controls.html" %}
 <div class="activity-live" hx-get="/activity/rows" hx-trigger="every 2s" hx-swap="innerHTML">
   {% include "_activity_rows.html" %}
 </div>

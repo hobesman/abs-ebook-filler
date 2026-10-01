@@ -166,21 +166,47 @@ class State:
         return out
 
     # ---- preferences -------------------------------------------------------------
+    def get_pref(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            r = self._conn.execute("SELECT value FROM prefs WHERE key=?", (key,)).fetchone()
+        return json.loads(r[0]) if r else default
+
+    def set_pref(self, key: str, value: Any) -> None:
+        self._exec(
+            "INSERT INTO prefs (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value)),
+        )
+
     def disabled_sources(self) -> set[str]:
         """Release source labels (e.g. "myanonamouse") hidden from search results, lower-cased."""
-        with self._lock:
-            r = self._conn.execute("SELECT value FROM prefs WHERE key='disabled_sources'").fetchone()
-        return set(json.loads(r[0])) if r else set()
+        return set(self.get_pref("disabled_sources", []))
 
     def set_source_enabled(self, label: str, enabled: bool) -> set[str]:
         disabled = self.disabled_sources()
         (disabled.discard if enabled else disabled.add)(source_key(label))
-        self._exec(
-            "INSERT INTO prefs (key, value) VALUES ('disabled_sources', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (json.dumps(sorted(disabled)),),
-        )
+        self.set_pref("disabled_sources", sorted(disabled))
         return disabled
+
+    # ---- queue order -------------------------------------------------------------
+    def reorder_queue(self, item_ids: list[str]) -> None:
+        """Put these queued books in this order by handing their existing queued_at values back out
+        sorted. Books not listed keep their position; nothing outside the group moves."""
+        if not item_ids:
+            return
+        marks = ",".join("?" * len(item_ids))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT item_id, COALESCE(queued_at, created_at) FROM items "
+                f"WHERE status='queued' AND item_id IN ({marks})", item_ids).fetchall()
+            present = {r[0] for r in rows}
+            times = sorted(r[1] for r in rows)
+            ordered = [i for i in dict.fromkeys(item_ids) if i in present]
+            # Equal timestamps would make the order ambiguous; nudge duplicates apart.
+            for n in range(1, len(times)):
+                if times[n] <= times[n - 1]:
+                    times[n] = times[n - 1] + 1e-6
+            self._conn.executemany("UPDATE items SET queued_at=? WHERE item_id=?", zip(times, ordered))
+            self._conn.commit()
 
     # ---- saved search results (pre-search / reuse across restarts) ----------------
     def save_search(self, item_id: str, query: str, data: dict[str, Any], complete: bool,

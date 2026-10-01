@@ -95,6 +95,17 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   **Retry** (same release), **Search again** (unmatch and jump to that book's search to pick a different
   release) and **Unmatch** (forget the release and mark the book missing again on the Books page). The same Retry /
   Unmatch buttons appear in a failed book's panel, above its search results.
+  - **In progress (N)** shows how many books are downloading/queued at a glance.
+  - **Reorder the queue** by dragging a book by its ⋮⋮ handle, or click ⤒ to process it next. Books already
+    started (downloading or waiting in Shelfmark's queue) stay pinned at the top.
+  - **Auto-retry failed downloads** (switch): re-queues every failed download immediately, then every
+    `AUTO_RETRY_MINUTES` (60) until switched off. Failures a retry can't fix (ebook already exists, folder not
+    found) are left alone. The setting survives restarts.
+  - **Pause processing for N minutes**: nothing new is sent to Shelfmark and running downloads stop checking
+    in — use it while restarting Shelfmark. Afterwards, downloads pick up where they were; ones Shelfmark
+    forgot in the restart are sent again automatically. Pre-search and auto-retry also wait. A ⏸ in the top
+    bar shows when it's paused; **Resume now** ends it early. Short outages without a pause are tolerated for
+    `SHELFMARK_GRACE` (120 s).
 - **Settings** – current config (secrets hidden) and a connection test.
 
 Downloads run in the background, so you can queue many books and keep browsing. Up to `DOWNLOAD_CONCURRENCY`

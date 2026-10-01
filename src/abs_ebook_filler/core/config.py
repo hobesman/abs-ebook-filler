@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     worker_concurrency: int = 0  # legacy name for download_concurrency; used if set
     # Automatic re-queue of a download that failed on a rate limit, after the cooldown.
     rate_limit_retries: int = 2
+    # "Auto-retry failed downloads" toggle: how often it re-queues every failed download.
+    auto_retry_minutes: float = 60.0
+    # How long a running download tolerates Shelfmark being unreachable (e.g. a restart) before failing.
+    shelfmark_grace: float = 120.0
+    # Times a download is re-sent if Shelfmark lost it (restarted and forgot its in-memory queue).
+    lost_task_resends: int = 2
     http_timeout: float = 60.0
     # Release searches hit every enabled source; Shelfmark's own budget is release_search_timeout (300s).
     search_timeout: float = 330.0

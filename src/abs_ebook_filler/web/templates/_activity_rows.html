@@ -1,16 +1,27 @@
-<h3>In progress</h3>
+<h3 class="queue-head">
+  In progress <span class="count">({{ active|length }})</span>
+  {% if active %}<small class="muted">{{ n_downloading }} downloading · {{ active|length - n_downloading }} queued</small>{% endif %}
+  {% if paused %}<small class="paused-note">⏸ Paused</small>{% endif %}
+</h3>
 {% if not active %}
   <p class="muted">Nothing downloading.</p>
 {% else %}
 <div class="overflow-auto">
 <table class="activity">
   <colgroup>
-    <col class="c-book"><col class="c-status"><col class="c-progress"><col>
+    <col class="c-grip"><col class="c-book"><col class="c-status"><col class="c-progress"><col>
   </colgroup>
-  <thead><tr><th>Book</th><th>Status</th><th>Progress</th><th>Detail</th></tr></thead>
-  <tbody>
+  <thead><tr><th></th><th>Book</th><th>Status</th><th>Progress</th><th>Detail</th></tr></thead>
+  <tbody class="queue-sortable">
   {% for r in active %}
-    <tr {% if r.status == "downloading" %}class="current"{% endif %}>
+    {% set movable = r.item_id not in claimed %}
+    <tr data-item-id="{{ r.item_id }}"
+        class="{% if r.status == 'downloading' %}current{% endif %}{% if movable %} movable{% endif %}">
+      <td class="grip-cell">{% if movable %}
+        <span class="grip" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+        <button class="small secondary outline next-btn" hx-post="/queue/{{ r.item_id }}/next"
+                hx-target="closest div.activity-live" title="Process this book next">⤒</button>
+      {% endif %}</td>
       <td>{{ r.clean_title }}<br><small class="muted">{{ r.author }}</small></td>
       <td><span class="badge st-{{ r.status }}">{{ r.status }}</span></td>
       <td>{% if r.status == "downloading" %}{% if r.progress is not none %}<progress value="{{ r.progress }}" max="100"></progress>{% else %}<progress></progress>{% endif %}{% endif %}</td>

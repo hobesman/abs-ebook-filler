@@ -163,4 +163,38 @@
   document.body.addEventListener("htmx:afterSettle", (e) => {
     if (e.detail.target && e.detail.target.id === "cands") maybeAutoDownload();
   });
+
+  // ---------- Activity: drag-and-drop queue order ----------
+  // Rows a worker has already started aren't draggable (no "movable" class). While a drag is in
+  // progress the 2-second refresh of the Activity table is held off, otherwise it would swap the
+  // table out from under the pointer.
+  let dragging = false;
+
+  document.body.addEventListener("htmx:beforeRequest", (e) => {
+    const elt = e.detail.elt;
+    if (dragging && elt && elt.classList && elt.classList.contains("activity-live")) e.preventDefault();
+  });
+
+  function initSortable(root) {
+    if (!window.Sortable || !root.querySelectorAll) return;
+    root.querySelectorAll("tbody.queue-sortable").forEach((tbody) => {
+      if (tbody._sortable) return;
+      tbody._sortable = window.Sortable.create(tbody, {
+        handle: ".grip",
+        draggable: "tr.movable",
+        animation: 150,
+        ghostClass: "drag-ghost",
+        onStart: () => { dragging = true; },
+        onEnd: (evt) => {
+          dragging = false;
+          if (evt.oldIndex === evt.newIndex) return;
+          const ids = Array.from(tbody.querySelectorAll("tr.movable")).map((r) => r.dataset.itemId);
+          htmx.ajax("POST", "/queue/reorder",
+                    { target: ".activity-live", swap: "innerHTML", values: { ids: ids } });
+        },
+      });
+    });
+  }
+  // Sortable is loaded (deferred) only on the Activity page; htmx.onLoad also covers each refresh.
+  if (window.htmx) htmx.onLoad(initSortable);
 })();

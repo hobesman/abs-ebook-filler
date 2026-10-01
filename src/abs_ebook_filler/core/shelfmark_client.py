@@ -34,6 +34,14 @@ class ShelfmarkError(RuntimeError):
     pass
 
 
+class ShelfmarkUnreachable(ShelfmarkError):
+    """Connection refused/reset, or a gateway error: Shelfmark is down or restarting."""
+
+
+class TaskLostError(ShelfmarkError):
+    """Shelfmark no longer knows the download (it keeps its queue in memory, so a restart forgets it)."""
+
+
 def _first(*vals: Any) -> str:
     for v in vals:
         if v not in (None, "", [], {}):
@@ -134,8 +142,12 @@ class ShelfmarkClient:
         except httpx.TimeoutException:
             secs = _timeout if _timeout is not None else self._http.timeout.read
             raise ShelfmarkError(f"Shelfmark {path} did not answer within {int(secs or 0)}s") from None
+        except httpx.TransportError as e:
+            raise ShelfmarkUnreachable(f"Can't reach Shelfmark ({type(e).__name__})") from None
         if r.status_code == 401:
             raise ShelfmarkError(f"Shelfmark rejected the API key (401) on {path}")
+        if r.status_code in (502, 503, 504) and path == "/api/status":
+            raise ShelfmarkUnreachable(f"Shelfmark is unavailable ({r.status_code})")
         if r.status_code >= 400:
             try:
                 msg = r.json().get("error") or r.text
@@ -256,7 +268,10 @@ class ShelfmarkClient:
         if not task_id:
             raise ShelfmarkError("Release has no source_id; cannot queue it")
         async with self._queue_lock:  # two books racing to queue the same release
-            r = await self._http.post("/api/releases/download", json=release)
+            try:
+                r = await self._http.post("/api/releases/download", json=release)
+            except httpx.TransportError as e:
+                raise ShelfmarkUnreachable(f"Can't reach Shelfmark ({type(e).__name__})") from None
             if r.status_code >= 400:
                 try:
                     msg = r.json().get("error") or r.text
@@ -286,26 +301,62 @@ class ShelfmarkClient:
         interval: float = 3.0,
         on_progress: Callable[[str, float | None, str], Any] | None = None,
         queue_timeout: float = 3600.0,
+        hold: Callable[[], bool] | None = None,
+        grace: float = 120.0,
     ) -> dict[str, Any]:
         """Wait for a Shelfmark download to finish.
 
         Two clocks: ``queue_timeout`` limits time spent waiting in Shelfmark's own queue (it only runs
         MAX_CONCURRENT_DOWNLOADS at a time), and ``timeout`` only starts once Shelfmark is actually
         working on it - so a book parked behind other downloads doesn't "time out" before it starts.
+
+        ``hold()`` true (processing paused, e.g. while Shelfmark restarts): Shelfmark isn't contacted
+        and both clocks stop. Shelfmark being unreachable is tolerated for ``grace`` seconds. If the
+        download has vanished afterwards (a restart empties Shelfmark's in-memory queue) this raises
+        TaskLostError so the caller can send it again.
         """
         started = time.monotonic()
         working_since: float | None = None
         missing_polls = 0
+        unreachable_since: float | None = None
+        after_outage = False
+
+        async def report(state: str, pct: Any = None, msg: str = "") -> None:
+            if on_progress:
+                res = on_progress(state, pct, msg)
+                if asyncio.iscoroutine(res):
+                    await res
+
         while True:
-            found = find_task(await self.shared_status(max_age=interval * 0.9), task_id)
+            if hold and hold():
+                held_from = time.monotonic()
+                await report("paused")
+                while hold():
+                    await asyncio.sleep(interval or 0.01)
+                held = time.monotonic() - held_from
+                started += held  # paused time doesn't count against either clock
+                if working_since is not None:
+                    working_since += held
+                after_outage = True
+                continue
+            try:
+                status = await self.shared_status(max_age=interval * 0.9)
+            except ShelfmarkUnreachable as e:
+                now = time.monotonic()
+                unreachable_since = unreachable_since or now
+                if now - unreachable_since > grace:
+                    raise ShelfmarkUnreachable(f"{e}; gave up after {int(grace)}s") from None
+                await report("unreachable", None, str(e))
+                after_outage = True
+                await asyncio.sleep(interval or 0.01)
+                continue
+            unreachable_since = None
+            found = find_task(status, task_id)
             if found:
                 missing_polls = 0
                 group, task = found
                 state = str(task.get("status") or group).lower()
-                if on_progress:
-                    res = on_progress(state, task.get("progress"), task.get("status_message") or "")
-                    if asyncio.iscoroutine(res):
-                        await res
+                await report(state, task.get("progress"), task.get("status_message") or "")
                 if state in TERMINAL_OK or group in TERMINAL_OK:
                     return task
                 if state in TERMINAL_FAIL or group in TERMINAL_FAIL:
@@ -323,8 +374,9 @@ class ShelfmarkClient:
                         raise ShelfmarkError(f"Timed out after {int(timeout)}s downloading task {task_id}")
             else:
                 missing_polls += 1
-                if missing_polls >= 10:
-                    raise ShelfmarkError(f"Task {task_id} disappeared from the Shelfmark queue")
+                # Right after an outage/pause a missing task almost certainly means Shelfmark restarted.
+                if missing_polls >= (3 if after_outage else 10):
+                    raise TaskLostError(f"Shelfmark no longer has task {task_id}")
             await asyncio.sleep(interval)
 
     async def fetch_file(self, task_id: str, dest: Path) -> None:

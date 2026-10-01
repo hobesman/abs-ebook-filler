@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..core.config import Settings, get_settings
+from ..core.autoretry import AutoRetry
 from ..core.models import SearchResult
 from ..core.presearch import PreSearcher, is_rate_limit
 from ..core.service import Service
@@ -44,6 +45,16 @@ def _ago(ts: float | None) -> str:
     return f"{secs / 3600:.0f} h"
 
 
+def _until(ts: float) -> str:
+    """'now' / '12 min' / '1 h' until a future time."""
+    secs = ts - time.time()
+    if secs <= 30:
+        return "now"
+    if secs < 3600:
+        return f"{max(1, round(secs / 60))} min"
+    return f"{secs / 3600:.1f} h"
+
+
 def create_app(settings: Settings | None = None, service: Service | None = None) -> FastAPI:
     settings = settings or get_settings()
     if not settings.web_password:
@@ -58,18 +69,21 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         app.state.cands = {}  # item_id -> list[Candidate] from the last search
         app.state.searches = {}  # item_id -> (query, started_at, asyncio.Task) for prefetch/reuse
         # Interactive searches (panel loads, rapid prefetch) are the tasks in app.state.searches;
-        # pre-search waits while any of them is running.
+        # pre-search waits while any of them is running, and while processing is paused.
         app.state.presearch = PreSearcher(
-            svc, is_busy=lambda: any(not t.done() for _, _, t in app.state.searches.values()))
+            svc, is_busy=lambda: svc.paused() or any(not t.done() for _, _, t in app.state.searches.values()))
+        app.state.autoretry = AutoRetry(svc, worker.submit)
         app.state.libraries = {}
         try:
             app.state.libraries = {l["id"]: l.get("name", l["id"]) for l in await svc.abs.libraries()}
         except Exception as e:
             log.warning("Could not load ABS libraries at startup: %s", e)
         await worker.start()
+        app.state.autoretry.start()
         try:
             yield
         finally:
+            await app.state.autoretry.stop()
             app.state.presearch.stop()
             await app.state.presearch.wait()
             for _, _, task in app.state.searches.values():
@@ -99,7 +113,9 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return request.app.state.svc
 
     def ctx(request: Request, **kw):
-        return {"request": request, "libraries": request.app.state.libraries, **kw}
+        s = svc(request)
+        return {"request": request, "libraries": request.app.state.libraries,
+                "paused": s.paused(), "pause_left": s.pause_left_text(), **kw}
 
     def _ready(s: Service) -> set[str]:
         """Books with saved search results, marked ⚡ in the list."""
@@ -288,17 +304,76 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
                                                                     ready=_ready(svc(request))))
 
     # ---- activity ----------------------------------------------------------------
+    def _rows_ctx(request: Request) -> dict:
+        """Started books first (downloading, then parked in Shelfmark's queue) - they can't be moved -
+        then everything still waiting in our queue, in queue order (State.active() order)."""
+        s = svc(request)
+        claimed = request.app.state.worker.claimed_ids()
+        active = sorted(s.state.active(),
+                        key=lambda r: (r["item_id"] not in claimed, r["status"] != "downloading"))
+        return {"active": active, "recent": s.state.recent(), "claimed": claimed,
+                "n_downloading": sum(1 for r in active if r["status"] == "downloading")}
+
+    def _controls_ctx(request: Request) -> dict:
+        ar: AutoRetry = request.app.state.autoretry
+        last = ar.last()
+        nxt = ar.next_due()
+        return {"ar_enabled": ar.enabled, "ar_minutes": int(ar.interval // 60),
+                "ar_last_ago": _ago(last["at"]) or "just now" if last else "",
+                "ar_last_count": last["count"] if last else 0,
+                "ar_next_in": _until(nxt) if nxt and ar.enabled else ""}
+
     @r.get("/activity", response_class=HTMLResponse)
     async def activity(request: Request):
-        s = svc(request)
         return templates.TemplateResponse(request, "activity.html", ctx(
-            request, active=s.state.active(), recent=s.state.recent()))
+            request, **_rows_ctx(request), **_controls_ctx(request)))
 
     @r.get("/activity/rows", response_class=HTMLResponse)
     async def activity_rows(request: Request):
-        s = svc(request)
-        return templates.TemplateResponse(request, "_activity_rows.html", ctx(
-            request, active=s.state.active(), recent=s.state.recent()))
+        return templates.TemplateResponse(request, "_activity_rows.html", ctx(request, **_rows_ctx(request)))
+
+    def _controls(request: Request):
+        return templates.TemplateResponse(request, "_activity_controls.html",
+                                          ctx(request, **_controls_ctx(request)))
+
+    @r.get("/activity/controls", response_class=HTMLResponse)
+    async def activity_controls(request: Request):
+        return _controls(request)
+
+    @r.post("/autoretry", response_class=HTMLResponse)
+    async def autoretry(request: Request, enabled: bool = Form(False)):
+        ar: AutoRetry = request.app.state.autoretry
+        ar.enable() if enabled else ar.disable()
+        return _controls(request)
+
+    @r.post("/pause", response_class=HTMLResponse)
+    async def pause(request: Request, minutes: int = Form(10)):
+        request.app.state.worker.pause(max(1, min(minutes, 240)))
+        return _controls(request)
+
+    @r.post("/resume", response_class=HTMLResponse)
+    async def resume(request: Request):
+        request.app.state.worker.resume()
+        return _controls(request)
+
+    def _reorder(request: Request, ids: list[str]) -> None:
+        claimed = request.app.state.worker.claimed_ids()
+        ids = [i for i in ids if i not in claimed]  # started books stay put
+        svc(request).state.reorder_queue(ids)
+        request.app.state.worker.reorder(ids)
+
+    @r.post("/queue/reorder", response_class=HTMLResponse)
+    async def queue_reorder(request: Request, ids: list[str] = Form([])):
+        _reorder(request, ids)
+        return await activity_rows(request)
+
+    @r.post("/queue/{item_id}/next", response_class=HTMLResponse)
+    async def queue_next(request: Request, item_id: str):
+        claimed = request.app.state.worker.claimed_ids()
+        waiting = [r["item_id"] for r in svc(request).state.active()
+                   if r["status"] == "queued" and r["item_id"] not in claimed]
+        _reorder(request, [item_id] + [i for i in waiting if i != item_id])
+        return await activity_rows(request)
 
     def _retry(request: Request, item_id: str) -> None:
         s = svc(request)
