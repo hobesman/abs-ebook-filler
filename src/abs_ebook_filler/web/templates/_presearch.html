@@ -1,5 +1,6 @@
 <div id="presearch" class="presearch"
-     {% if pre.running %}hx-get="/presearch/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+     {% if pre.running %}hx-get="/presearch/status" hx-trigger="every 3s[!this.contains(document.activeElement)]" hx-swap="outerHTML"{% endif %}>
+  <div class="pre-row">
   {% if pre.running %}
     <span aria-busy="true"></span>
     <span>
@@ -29,4 +30,20 @@
       {% if pre.message %} · {{ pre.message }}{% if pre.failed or pre.partial %} ({{ pre.failed }} failed, {{ pre.partial }} incomplete){% endif %}{% endif %}
     </small>
   {% endif %}
+  </div>
+
+  <div class="pre-row">
+    <form hx-post="/queue-perfect" hx-disabled-elt="find button"
+          title="Queue pre-searched books whose results include a release scored 100 from an enabled (not hidden) source, top of the list first.">
+      <span>Add the next</span>
+      <input type="number" name="count" value="{{ [pre_perfect, 10]|min if pre_perfect else 10 }}" min="1" max="2000"
+             aria-label="Number of books to queue">
+      <span>100-score books to the queue</span>
+      <button type="submit" class="small" {% if pre_perfect == 0 %}disabled{% endif %}>Queue</button>
+    </form>
+    <small class="muted">
+      {% if pre_perfect is none %}(count shown when pre-search finishes)
+      {% else %}💯 {{ pre_perfect }} pre-searched book{{ "" if pre_perfect == 1 else "s" }} ready with a 100 match{% endif %}
+    </small>
+  </div>
 </div>

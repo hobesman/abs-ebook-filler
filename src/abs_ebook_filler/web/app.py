@@ -139,9 +139,13 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         s = svc(request)
         ready = s.state.searched_ids(s.s.search_cache_seconds, complete_only=True)
         missing = {r["item_id"] for r in s.state.list(status="missing")}
-        return {"pre": request.app.state.presearch.status.to_dict(),
+        pre = request.app.state.presearch.status.to_dict()
+        return {"pre": pre,
                 "pre_ready": len(ready & missing), "pre_missing": len(missing),
-                "pre_default": s.s.presearch_count, "cache_hours": s.s.search_cache_hours}
+                "pre_default": s.s.presearch_count, "cache_hours": s.s.search_cache_hours,
+                # Reading every saved result isn't free, so skip it on the 3-second refresh while
+                # pre-search runs (shown again when it finishes).
+                "pre_perfect": None if pre["running"] else len(s.perfect_matches())}
 
     def _presearch_fragment(request: Request):
         return templates.TemplateResponse(request, "_presearch.html", ctx(request, **_presearch_ctx(request)))
@@ -366,6 +370,38 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     async def queue_reorder(request: Request, ids: list[str] = Form([])):
         _reorder(request, ids)
         return await activity_rows(request)
+
+    @r.post("/queue/{item_id}/cancel", response_class=HTMLResponse)
+    async def queue_cancel(request: Request, item_id: str):
+        """Red ✕ on the Activity page: drop the book from the queue (stopping its download if it
+        started) and mark it skipped."""
+        s = svc(request)
+        row = s.state.get(item_id)
+        if not row:
+            raise HTTPException(404, "Unknown item")
+        if row["status"] not in ("queued", "downloading"):
+            raise HTTPException(409, f"Can't cancel a book that is {row['status']}")
+        where = request.app.state.worker.cancel(item_id)
+        if where == "running" or row["status"] == "downloading":
+            await s.cancel_in_shelfmark(item_id)
+        s.mark_cancelled(item_id)
+        return await activity_rows(request)
+
+    @r.post("/queue-perfect")
+    async def queue_perfect(request: Request, count: int = Form(10)):
+        """Books page: enqueue the next N pre-searched books with a 100-score enabled-source match."""
+        count = max(1, min(count, 2000))
+        ids = svc(request).queue_perfect(count)
+        for item_id in ids:
+            request.app.state.worker.submit(item_id)
+        msg = f"Queued {len(ids)} book(s) with a 100-score match."
+        if len(ids) < count:
+            msg += (f" Only {len(ids)} pre-searched book(s) had one"
+                    " - pre-search more books to find others." if ids else
+                    " No pre-searched book has one right now - pre-search more books first.")
+        resp = Response(status_code=204)
+        resp.headers["HX-Redirect"] = "/?" + urlencode({"flash": msg})
+        return resp
 
     @r.post("/queue/{item_id}/next", response_class=HTMLResponse)
     async def queue_next(request: Request, item_id: str):

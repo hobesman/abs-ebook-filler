@@ -249,12 +249,59 @@ class Service:
             self.state.update(item_id, status="done", progress=100, ebook_path=str(placed),
                               message=f"Saved {placed.name}{note}")
             return placed
+        except asyncio.CancelledError:  # cancelled from the Activity page: the caller sets the status
+            if temp is not None:
+                temp.unlink(missing_ok=True)
+            raise
         except Exception as e:
             log.exception("Processing %s failed", item_id)
             if temp is not None:
                 temp.unlink(missing_ok=True)
             self.state.update(item_id, status="failed", message=str(e)[:500])
             raise
+
+    # ---- cancel ------------------------------------------------------------------
+    async def cancel_in_shelfmark(self, item_id: str) -> None:
+        """Ask Shelfmark to drop this book's download, unless another queued/downloading book is
+        sharing the same release (cancelling would pull it out from under that one too)."""
+        row = self.state.get(item_id)
+        task_id = str(((row or {}).get("release") or {}).get("source_id") or "")
+        if not task_id:
+            return
+        for other in self.state.active():
+            if other["item_id"] != item_id and str((other.get("release") or {}).get("source_id")) == task_id:
+                return
+        try:
+            await self.sm.cancel_download(task_id)
+        except Exception as e:  # already finished/forgotten in Shelfmark - nothing to cancel
+            log.info("Shelfmark cancel for %s: %s", task_id, e)
+
+    def mark_cancelled(self, item_id: str) -> None:
+        self.state.update(item_id, status="skipped", release=None, progress=None,
+                          message="Cancelled from the queue")
+
+    # ---- bulk queue: pre-searched perfect matches --------------------------------
+    def perfect_matches(self, limit: int | None = None) -> list[tuple[str, Candidate]]:
+        """Missing books (list order) whose saved search has a release scored 100 from an enabled
+        source: [(item_id, best such candidate)], at most ``limit``."""
+        out: list[tuple[str, Candidate]] = []
+        for row in self.state.list(status="missing", limit=100_000):
+            hit = self.state.load_search(row["item_id"], self.default_query(row), self.s.search_cache_seconds)
+            if not hit:
+                continue
+            shown, _ = self.select(SearchResult.from_data(*hit).cands)  # enabled sources, best first
+            if shown and shown[0].score >= 100:
+                out.append((row["item_id"], shown[0]))
+                if limit is not None and len(out) >= limit:
+                    break
+        return out
+
+    def queue_perfect(self, count: int) -> list[str]:
+        """Enqueue the next ``count`` pre-searched books that have a 100-score release."""
+        picked = self.perfect_matches(max(0, count))
+        for item_id, cand in picked:
+            self.enqueue(item_id, cand.raw)
+        return [item_id for item_id, _ in picked]
 
     # ---- probing -----------------------------------------------------------------
     async def probe(self, title: str = "Dune", author: str = "Frank Herbert") -> dict[str, Any]:

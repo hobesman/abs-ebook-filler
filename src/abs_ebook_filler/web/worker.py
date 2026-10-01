@@ -28,6 +28,7 @@ class Worker:
         self._idle.set()
         self._tasks: list[asyncio.Task] = []
         self._wake: asyncio.TimerHandle | None = None  # fires when a pause ends
+        self._jobs: dict[str, asyncio.Task] = {}       # item_id -> its running Service.process task
 
     async def start(self) -> None:
         # Resume anything left over from a previous run (State.active() is already in queue order).
@@ -114,14 +115,39 @@ class Worker:
                 self._changed.clear()
                 await self._changed.wait()
                 continue
+            # Each book runs as its own task so it can be cancelled without stopping this worker.
+            job = asyncio.create_task(self.service.process(item_id))
+            self._jobs[item_id] = job
             try:
-                await self.service.process(item_id)
+                await job
             except asyncio.CancelledError:
-                raise
+                if asyncio.current_task().cancelling():  # the worker itself is stopping
+                    job.cancel()
+                    raise
+                log.info("worker %d: %s cancelled", n, item_id)  # cancelled by the user
             except Exception as e:  # already recorded in state by Service.process
                 log.warning("worker %d: %s failed: %s", n, item_id, e)
             finally:
+                self._jobs.pop(item_id, None)
                 self._running.pop(item_id, None)
                 if not self._running and not self._waiting:
                     self._idle.set()
                 self._changed.set()  # a slot freed up: let waiting workers re-check
+
+    # ---- cancel --------------------------------------------------------------------
+    def cancel(self, item_id: str) -> str | None:
+        """Take a book out of the queue, or stop its download if it already started.
+
+        Returns "waiting", "running", or None if the worker didn't have it.
+        """
+        if item_id in self._source:  # still waiting in our queue
+            self._waiting.remove(item_id)
+            del self._source[item_id]
+            if not self._running and not self._waiting:
+                self._idle.set()
+            return "waiting"
+        job = self._jobs.get(item_id)
+        if job and not job.done():
+            job.cancel()
+            return "running"
+        return None

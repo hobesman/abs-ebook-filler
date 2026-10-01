@@ -379,6 +379,15 @@ class ShelfmarkClient:
                     raise TaskLostError(f"Shelfmark no longer has task {task_id}")
             await asyncio.sleep(interval)
 
+    async def cancel_download(self, task_id: str) -> None:
+        """Remove a queued/running download from Shelfmark (DELETE /api/download/<id>/cancel)."""
+        try:
+            r = await self._http.delete(f"/api/download/{task_id}/cancel")
+        except httpx.TransportError as e:
+            raise ShelfmarkUnreachable(f"Can't reach Shelfmark ({type(e).__name__})") from None
+        if r.status_code >= 400:
+            raise ShelfmarkError(f"Shelfmark cancel returned {r.status_code}: {r.text[:200]}")
+
     async def fetch_file(self, task_id: str, dest: Path) -> None:
         """Stream the finished file to ``dest``."""
         async with self._http.stream("GET", "/api/localdownload", params={"id": task_id}) as r:

@@ -9,9 +9,9 @@
 <div class="overflow-auto">
 <table class="activity">
   <colgroup>
-    <col class="c-grip"><col class="c-book"><col class="c-status"><col class="c-progress"><col>
+    <col class="c-grip"><col class="c-book"><col class="c-status"><col class="c-progress"><col><col class="c-x">
   </colgroup>
-  <thead><tr><th></th><th>Book</th><th>Status</th><th>Progress</th><th>Detail</th></tr></thead>
+  <thead><tr><th></th><th>Book</th><th>Status</th><th>Progress</th><th>Detail</th><th></th></tr></thead>
   <tbody class="queue-sortable">
   {% for r in active %}
     {% set movable = r.item_id not in claimed %}
@@ -26,6 +26,11 @@
       <td><span class="badge st-{{ r.status }}">{{ r.status }}</span></td>
       <td>{% if r.status == "downloading" %}{% if r.progress is not none %}<progress value="{{ r.progress }}" max="100"></progress>{% else %}<progress></progress>{% endif %}{% endif %}</td>
       <td class="detail" title="{{ r.message }}"><small>{{ r.message }}</small></td>
+      <td class="x-cell">
+        <button class="cancel-x" hx-post="/queue/{{ r.item_id }}/cancel" hx-target="closest div.activity-live"
+                hx-confirm="Cancel “{{ r.clean_title }}”? It will be removed from the queue{% if r.status == 'downloading' or r.item_id in claimed %} and its download stopped{% endif %}, and marked skipped."
+                title="Cancel: remove from the queue and mark skipped" aria-label="Cancel {{ r.clean_title }}">✕</button>
+      </td>
     </tr>
   {% endfor %}
   </tbody>

@@ -81,6 +81,9 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   and retries. Books with results ready get a ⚡ and open instantly; results are kept `SEARCH_CACHE_HOURS`
   (24 h). Every normal search is saved the same way. Start it, go do something else, then work through the
   list in rapid mode. Also available as `abs-ebook-filler presearch --count 100` (e.g. nightly from cron).
+- **Add the next [N] 100-score books to the queue** (under pre-search) – queues pre-searched books whose results
+  include a release scored 100 from an enabled source, top of the list first, without opening each one. The
+  💯 count shows how many are ready; books that haven't been pre-searched aren't considered.
 - **Rapid mode** (toggle on the Books page, remembered per browser) – after **Download** or **Skip** the
   panel jumps straight to the next missing/failed book in the list and searches it. The next book's search is
   started in the background while you look at the current one, so results are usually ready when you arrive.
@@ -96,6 +99,8 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   release) and **Unmatch** (forget the release and mark the book missing again on the Books page). The same Retry /
   Unmatch buttons appear in a failed book's panel, above its search results.
   - **In progress (N)** shows how many books are downloading/queued at a glance.
+  - **Cancel** a queued or downloading book with its red ✕: it's removed from the queue (its Shelfmark
+    download is stopped too, unless another book is sharing that release) and marked skipped.
   - **Reorder the queue** by dragging a book by its ⋮⋮ handle, or click ⤒ to process it next. Books already
     started (downloading or waiting in Shelfmark's queue) stay pinned at the top.
   - **Auto-retry failed downloads** (switch): re-queues every failed download immediately, then every
