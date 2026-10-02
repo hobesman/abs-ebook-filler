@@ -14,6 +14,33 @@
     </small>
   </div>
 
+  <div class="ctl aa">
+    {% if aa.configured %}
+      <span class="aa-count" title="Anna's Archive counts fast downloads over a rolling 18 hours; each one frees up 18 h after it was used.">
+        ⚡ Fast downloads:
+        {% if aa.left is none %}<strong>unknown</strong>
+        {% else %}<strong class="{% if aa.left == 0 %}aa-zero{% endif %}">{{ aa.left }}</strong> / {{ aa.per_day }} left{% endif %}
+      </span>
+      <small class="muted">
+        {% if aa.error %}<span class="error">{{ aa.error }}</span>
+        {% elif aa.left is none %}known after the first Direct Download finishes
+        {% else %}checked {{ aa_checked_ago }}{% if aa_checked_ago != "just now" %} ago{% endif %}{% endif %}
+        {% if aa.left == 0 and aa_frees_in %} · next slot frees within {{ aa_frees_in }}{% endif %}
+      </small>
+      <button class="small secondary outline" hx-post="/aa/check" hx-target="#activity-controls" hx-swap="outerHTML"
+              title="Check now (never uses up a fast download)">↻</button>
+      <label class="rapid-toggle"
+             title="Hold Anna's Archive Direct Downloads in our queue until a fast download slot is free, instead of sending them to Shelfmark to fail and be retried. Torrents keep going meanwhile.">
+        <input type="checkbox" role="switch" name="enabled" value="true" {% if aa_wait %}checked{% endif %}
+               hx-post="/aa/wait" hx-target="#activity-controls" hx-swap="outerHTML">
+        Wait for a fast download slot
+      </label>
+      {% if aa_wait and aa_waiting %}<small class="muted">{{ aa_waiting }} waiting for a slot</small>{% endif %}
+    {% else %}
+      <small class="muted">⚡ Set <code>ANNAS_ARCHIVE_KEY</code> (your Anna's Archive membership key, as in Shelfmark) to track fast downloads left and hold Direct Downloads until a slot is free.</small>
+    {% endif %}
+  </div>
+
   <div class="ctl">
     {% if paused %}
       <span class="paused-note">⏸ Processing paused, resumes in {{ pause_left }}</span>

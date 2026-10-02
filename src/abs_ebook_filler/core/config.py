@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     shelfmark_api_key: str = ""
     shelfmark_books_dir: str = ""  # optional local mount of Shelfmark's /books
 
+    # Anna's Archive membership key (same as Shelfmark's AA_DONATOR_KEY): lets the app track how
+    # many fast downloads are left and, if switched on, hold Direct Downloads until one is free.
+    annas_archive_key: str = ""
+    annas_archive_url: str = "https://annas-archive.gl"
+    aa_check_minutes: float = 10.0
+
     # Filesystem: "container_prefix:local_prefix[,more...]"
     path_map: str = ""
 
@@ -93,7 +99,7 @@ class Settings(BaseSettings):
 
     def redacted(self) -> dict:
         out = self.model_dump()
-        for k in ("abs_token", "shelfmark_api_key", "web_password"):
+        for k in ("abs_token", "shelfmark_api_key", "web_password", "annas_archive_key"):
             if out.get(k):
                 out[k] = "********"
         return out

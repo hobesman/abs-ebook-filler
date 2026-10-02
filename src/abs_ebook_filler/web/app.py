@@ -55,6 +55,22 @@ def _until(ts: float) -> str:
     return f"{secs / 3600:.1f} h"
 
 
+async def _aa_watch(svc: Service, worker: Worker, tick: float = 60.0) -> None:
+    """Keep the Anna's Archive fast-download count fresh: every AA_CHECK_MINUTES, plus every tick while
+    books are waiting for a slot. Checks never spend a fast download (see core/annas.py)."""
+    interval = max(60.0, svc.s.aa_check_minutes * 60)
+    while True:
+        try:
+            waiting_md5 = worker.next_blocked_aa_md5()
+            age = time.time() - (svc.aa.status()["checked_at"] or 0)
+            if age >= interval or (waiting_md5 and age >= min(interval, 300)):
+                await svc.aa.refresh(next_wanted=waiting_md5)
+                worker.wake()
+        except Exception:
+            log.exception("Anna's Archive quota check failed")
+        await asyncio.sleep(tick)
+
+
 def create_app(settings: Settings | None = None, service: Service | None = None) -> FastAPI:
     settings = settings or get_settings()
     if not settings.web_password:
@@ -80,9 +96,13 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
             log.warning("Could not load ABS libraries at startup: %s", e)
         await worker.start()
         app.state.autoretry.start()
+        aa_task = asyncio.create_task(_aa_watch(svc, worker)) if svc.aa.configured else None
         try:
             yield
         finally:
+            if aa_task:
+                aa_task.cancel()
+                await asyncio.gather(aa_task, return_exceptions=True)
             await app.state.autoretry.stop()
             app.state.presearch.stop()
             await app.state.presearch.wait()
@@ -322,10 +342,17 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         ar: AutoRetry = request.app.state.autoretry
         last = ar.last()
         nxt = ar.next_due()
+        s = svc(request)
+        aa = s.aa.status()
         return {"ar_enabled": ar.enabled, "ar_minutes": int(ar.interval // 60),
                 "ar_last_ago": _ago(last["at"]) or "just now" if last else "",
                 "ar_last_count": last["count"] if last else 0,
-                "ar_next_in": _until(nxt) if nxt and ar.enabled else ""}
+                "ar_next_in": _until(nxt) if nxt and ar.enabled else "",
+                "aa": aa, "aa_wait": s.aa_wait_enabled(),
+                "aa_checked_ago": (_ago(aa["checked_at"]) or "just now") if aa["checked_at"] else "",
+                "aa_frees_in": _until(aa["next_free_at"]) if aa["next_free_at"] else "",
+                "aa_waiting": sum(1 for r in s.state.active()
+                                  if r["status"] == "queued" and "fast download slot" in (r["message"] or ""))}
 
     @r.get("/activity", response_class=HTMLResponse)
     async def activity(request: Request):
@@ -348,6 +375,18 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
     async def autoretry(request: Request, enabled: bool = Form(False)):
         ar: AutoRetry = request.app.state.autoretry
         ar.enable() if enabled else ar.disable()
+        return _controls(request)
+
+    @r.post("/aa/wait", response_class=HTMLResponse)
+    async def aa_wait(request: Request, enabled: bool = Form(False)):
+        svc(request).set_aa_wait(enabled)
+        request.app.state.worker.wake()  # switched off: held Direct Downloads can go now
+        return _controls(request)
+
+    @r.post("/aa/check", response_class=HTMLResponse)
+    async def aa_check(request: Request):
+        await svc(request).aa.refresh(next_wanted=request.app.state.worker.next_blocked_aa_md5())
+        request.app.state.worker.wake()
         return _controls(request)
 
     @r.post("/pause", response_class=HTMLResponse)

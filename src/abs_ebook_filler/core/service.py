@@ -13,6 +13,7 @@ from .abs_client import ABSClient, has_ebook, is_missing_ebook, item_to_book
 from .config import Settings
 from .matching import build_query, primary_author, score
 from .models import Book, Candidate, SearchResult
+from .annas import AnnasQuota, aa_md5, is_aa_release
 from .ratelimit import rate_limit_wait
 from .shelfmark_client import (QUEUED_STATES, ShelfmarkClient, ShelfmarkError, ShelfmarkUnreachable,
                                TaskLostError, release_format)
@@ -31,6 +32,8 @@ class Service:
         self.abs = abs_client or ABSClient(settings.abs_url, settings.abs_token, settings.http_timeout)
         self._sleep = asyncio.sleep  # swapped out in tests to skip real cooldown waits
         self._paused_until = float(self.state.get_pref("paused_until", 0) or 0)
+        self.aa = AnnasQuota(self.state, settings.annas_archive_key, settings.annas_archive_url,
+                             settings.http_timeout)
         self.sm = shelfmark or ShelfmarkClient(
             settings.shelfmark_url, settings.shelfmark_api_key, settings.http_timeout,
             search_timeout=settings.search_timeout, search_concurrency=settings.search_concurrency)
@@ -38,7 +41,21 @@ class Service:
     async def aclose(self) -> None:
         await self.abs.aclose()
         await self.sm.aclose()
+        await self.aa.aclose()
         self.state.close()
+
+    # ---- Anna's Archive fast-download slots --------------------------------------
+    def aa_wait_enabled(self) -> bool:
+        """Hold Anna's Archive Direct Downloads until a fast-download slot is free (Activity switch)."""
+        return self.aa.configured and bool(self.state.get_pref("aa_wait_for_fast", False))
+
+    def set_aa_wait(self, enabled: bool) -> None:
+        self.state.set_pref("aa_wait_for_fast", bool(enabled))
+
+    def aa_blocked(self, release: dict[str, Any] | None) -> bool:
+        """True if this release should wait for a fast-download slot right now."""
+        return (self.aa_wait_enabled() and is_aa_release(release)
+                and not self.aa.slot_available(aa_md5(release)))
 
     # ---- scanning ----------------------------------------------------------------
     async def scan(self) -> dict[str, int]:
@@ -248,6 +265,11 @@ class Service:
                 note = f" (ABS rescan failed: {e})"
             self.state.update(item_id, status="done", progress=100, ebook_path=str(placed),
                               message=f"Saved {placed.name}{note}")
+            if is_aa_release(release) and self.aa.configured:
+                try:  # update the fast-download count now (free: this md5 is in the window)
+                    await self.aa.refresh(downloaded=aa_md5(release))
+                except Exception as e:
+                    log.info("Anna's Archive quota check failed: %s", e)
             return placed
         except asyncio.CancelledError:  # cancelled from the Activity page: the caller sets the status
             if temp is not None:
@@ -313,6 +335,7 @@ class Service:
             ("shelfmark_status", self.sm.status()),
             ("shelfmark_manual_releases", self.sm.manual_releases(title, author)),
             ("shelfmark_metadata", self.sm.metadata_search(f"{title} {author}")),
+            *((("annas_archive_quota", self.aa.refresh()),) if self.aa.configured else ()),
         ):
             t0 = time.monotonic()
             try:

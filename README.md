@@ -106,6 +106,16 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   - **Auto-retry failed downloads** (switch): re-queues every failed download immediately, then every
     `AUTO_RETRY_MINUTES` (60) until switched off. Failures a retry can't fix (ebook already exists, folder not
     found) are left alone. The setting survives restarts.
+  - **⚡ Fast downloads left** (needs `ANNAS_ARCHIVE_KEY`, the same membership key Shelfmark uses as
+    `AA_DONATOR_KEY`): shows how many Anna's Archive fast downloads remain. Anna's Archive counts them over a
+    rolling 18 hours (each frees up 18 h after it was used), so there's no midnight reset. The count is
+    refreshed every `AA_CHECK_MINUTES` (10) and after each Direct Download; checks never use up a fast
+    download (they ask about a file already downloaded in the window, or the next book you actually want).
+    It's "unknown" on a fresh start until the first Direct Download finishes.
+  - **Wait for a fast download slot** (switch): when none are left, Anna's Archive Direct Downloads stay in
+    our queue ("Waiting for an Anna's Archive fast download slot") instead of going to Shelfmark to fail
+    with a 429 and be retried. Torrents and other sources keep downloading past them. They start as soon as
+    a slot frees up.
   - **Pause processing for N minutes**: nothing new is sent to Shelfmark and running downloads stop checking
     in — use it while restarting Shelfmark. Afterwards, downloads pick up where they were; ones Shelfmark
     forgot in the restart are sent again automatically. Pre-search and auto-retry also wait. A ⏸ in the top
