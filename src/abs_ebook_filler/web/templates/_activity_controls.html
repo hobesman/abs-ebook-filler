@@ -28,7 +28,7 @@
         {% if aa.left == 0 and aa_frees_in %} · next slot frees within {{ aa_frees_in }}{% endif %}
       </small>
       <button class="small secondary outline" hx-post="/aa/check" hx-target="#activity-controls" hx-swap="outerHTML"
-              title="Check now (never uses up a fast download)">↻</button>
+              title="Check now. It only asks Anna's Archive when it can do so without using up a fast download; otherwise the count updates with the next Direct Download.">↻</button>
       <label class="rapid-toggle"
              title="Hold Anna's Archive Direct Downloads in our queue until a fast download slot is free, instead of sending them to Shelfmark to fail and be retried. Torrents keep going meanwhile.">
         <input type="checkbox" role="switch" name="enabled" value="true" {% if aa_wait %}checked{% endif %}

@@ -122,6 +122,20 @@ class AnnasQuota:
             d["pending"][md5] = self._clock()
             self._save(d)
 
+    def release(self, md5: str) -> None:
+        """A book handed to Shelfmark has finished (or failed/was cancelled): stop counting it as pending.
+
+        If Shelfmark really used a fast download for it, Anna's Archive's list says so at the next
+        check and it's counted from there; if it didn't (slow mirror, no fast copy, failure), the slot
+        was never used and shouldn't stay reserved.
+        """
+        if not self.configured or not md5:
+            return
+        d = self._data()
+        if d["pending"].pop(md5, None) is not None:
+            self._save(d)
+            self._changed()
+
     def next_free_at(self) -> float | None:
         """When a slot is certain to have freed up (None if one is free or nothing is known)."""
         if (self.left() or 0) > 0:
@@ -145,18 +159,21 @@ class AnnasQuota:
     async def refresh(self, next_wanted: str | None = None, downloaded: str | None = None) -> dict[str, Any]:
         """Ask Anna's Archive for the current numbers, without spending a fast download.
 
-        Probe md5, in order of preference: one certainly still in the window (free); ``downloaded``,
-        a book Shelfmark just fetched with a fast download (free, it's now in the window); the newest
-        book already handed to Shelfmark (free once Shelfmark fetched it, otherwise it takes the slot
-        that book is about to use); or ``next_wanted``, the next book waiting for a slot (same idea).
+        Probe md5, in order of preference: one certainly still in the window (free); the newest book
+        Shelfmark is working on right now (free once Shelfmark fetched it; otherwise it takes the slot
+        that book is about to use); ``next_wanted``, the next book waiting for a slot (same idea); and,
+        only while the count is still unknown, ``downloaded`` - a book that just finished. That last one
+        is free if Shelfmark used a fast download for it, but would spend a slot if it used a slow
+        mirror, so it's limited to the very first check.
         """
         if not self.configured:
             return self.status()
         async with self._lock:
             d = self._data()
             newest_pending = max(d["pending"], key=d["pending"].get) if d["pending"] else ""
-            md5 = (self._safe_probe_md5(d) or (downloaded or "").lower() or newest_pending
-                   or (next_wanted or "").lower() or None)
+            first_check = (downloaded or "").lower() if d["per_day"] is None else ""
+            md5 = (self._safe_probe_md5(d) or newest_pending or (next_wanted or "").lower()
+                   or first_check or None)
             if not md5:
                 if not d["recent"] and not d["pending"] and d["per_day"] is not None:
                     d["zero_until"] = 0.0  # nothing in the window: the full allowance is available

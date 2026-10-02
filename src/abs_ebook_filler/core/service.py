@@ -266,7 +266,10 @@ class Service:
             self.state.update(item_id, status="done", progress=100, ebook_path=str(placed),
                               message=f"Saved {placed.name}{note}")
             if is_aa_release(release) and self.aa.configured:
-                try:  # update the fast-download count now (free: this md5 is in the window)
+                # Stop counting it as pending (Anna's Archive's own list decides from here), then
+                # update the count.
+                self.aa.release(aa_md5(release))
+                try:
                     await self.aa.refresh(downloaded=aa_md5(release))
                 except Exception as e:
                     log.info("Anna's Archive quota check failed: %s", e)
@@ -274,11 +277,15 @@ class Service:
         except asyncio.CancelledError:  # cancelled from the Activity page: the caller sets the status
             if temp is not None:
                 temp.unlink(missing_ok=True)
+            if is_aa_release(release):
+                self.aa.release(aa_md5(release))
             raise
         except Exception as e:
             log.exception("Processing %s failed", item_id)
             if temp is not None:
                 temp.unlink(missing_ok=True)
+            if is_aa_release(release):
+                self.aa.release(aa_md5(release))  # a failed download doesn't keep a slot reserved
             self.state.update(item_id, status="failed", message=str(e)[:500])
             raise
 

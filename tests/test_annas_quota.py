@@ -116,6 +116,49 @@ async def test_probe_with_next_wanted_that_spends_its_slot(service):
 
 
 @respx.mock
+async def test_finished_or_failed_book_stops_holding_a_slot(service):
+    q = quota(service)
+    respx.get(AA).mock(return_value=httpx.Response(200, json=info(1, 2, [A])))
+    q.reserve(A)
+    await q.refresh()                # learns per_day=2, A confirmed
+    q.reserve(B)                     # handed to Shelfmark...
+    assert q.left() == 0
+    q.release(B)                     # ...and it failed without Anna's Archive counting it
+    assert q.left() == 1             # matches Anna's Archive again (no 45-minute phantom)
+
+
+@respx.mock
+async def test_finished_book_only_used_for_the_very_first_check(service):
+    clock = Clock()
+    q = quota(service, clock)
+    route = respx.get(AA).mock(return_value=httpx.Response(200, json=info(1, 2, [A])))
+    await q.refresh(downloaded=A)    # count unknown: one-time check with the finished book
+    assert route.call_count == 1 and q.left() == 1
+    clock.t += WINDOW                # A has left the window; nothing safe to ask about any more
+    await q.refresh(downloaded=B)    # B may have come via a slow mirror: asking could spend a slot
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_service_releases_slot_when_download_fails(service, library):
+    (library / "Author" / "F").mkdir(parents=True, exist_ok=True)
+    service.state.sync_missing([Book(item_id="F", library_id="l", title="F", clean_title="F", author="Author",
+                                     path="/audiobooks/Author/F")])
+    service.aa = quota(service)
+    respx.post("http://sm/api/releases/download").mock(return_value=httpx.Response(200, json={"status": "queued"}))
+    respx.get("http://sm/api/status").mock(return_value=httpx.Response(
+        200, json={"error": {C: {"status": "error", "status_message": "All download sources failed"}}}))
+    service.enqueue("F", aa_rel(C))
+    service.aa.reserve(C)            # what the worker does when it starts the book
+    try:
+        await service.process("F")
+    except Exception:
+        pass
+    assert C not in service.aa._data()["pending"]
+    assert service.state.get("F")["status"] == "failed"
+
+
+@respx.mock
 async def test_bad_key_reported(service):
     q = quota(service)
     q.reserve(A)
