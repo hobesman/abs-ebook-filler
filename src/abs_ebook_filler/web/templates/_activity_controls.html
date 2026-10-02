@@ -19,16 +19,26 @@
       <span class="aa-count" title="Anna's Archive counts fast downloads over a rolling 18 hours; each one frees up 18 h after it was used.">
         ⚡ Fast downloads:
         {% if aa.left is none %}<strong>unknown</strong>
-        {% else %}<strong class="{% if aa.left == 0 %}aa-zero{% endif %}">{{ aa.left }}</strong> / {{ aa.per_day }} left{% endif %}
+        {% else %}<strong class="{% if aa.left == 0 %}aa-zero{% endif %}">{{ aa.left }}</strong> available{% endif %}
       </span>
-      <small class="muted">
-        {% if aa.error %}<span class="error">{{ aa.error }}</span>
-        {% elif aa.left is none %}known after the first Direct Download finishes
-        {% else %}checked {{ aa_checked_ago }}{% if aa_checked_ago != "just now" %} ago{% endif %}{% endif %}
+      <small class="muted aa-detail">
+        {% if aa.reported_left is not none %}
+          Anna's Archive said <strong>{{ aa.reported_left }}</strong> of {{ aa.per_day }} left
+          {{ aa_checked_ago }}{% if aa_checked_ago != "just now" %} ago{% endif %}
+        {% elif not aa.error %}known after the first Direct Download finishes{% endif %}
+        {% if aa.held %} · {{ aa.held }} held for {{ "a book" if aa.held == 1 else aa.held ~ " books" }} Shelfmark is working on{% endif %}
         {% if aa.left == 0 and aa_frees_in %} · next slot frees within {{ aa_frees_in }}{% endif %}
       </small>
       <button class="small secondary outline" hx-post="/aa/check" hx-target="#activity-controls" hx-swap="outerHTML"
-              title="Check now. It only asks Anna's Archive when it can do so without using up a fast download; otherwise the count updates with the next Direct Download.">↻</button>
+              title="Check now. It only asks Anna's Archive when it can do so without using up a fast download.">↻</button>
+      {% if aa_just_checked and aa.last_result in ("ok", "out") %}
+        <small class="aa-note ok">✓ Checked just now</small>
+      {% elif aa_just_checked and aa.last_result == "no_free_check" %}
+        <small class="aa-note">Didn't ask: there's no way to check right now without using up a fast download.
+          It updates with the next Direct Download.</small>
+      {% elif aa.error %}
+        <small class="aa-note error">{{ aa.error }}</small>
+      {% endif %}
       <label class="rapid-toggle"
              title="Hold Anna's Archive Direct Downloads in our queue until a fast download slot is free, instead of sending them to Shelfmark to fail and be retried. Torrents keep going meanwhile.">
         <input type="checkbox" role="switch" name="enabled" value="true" {% if aa_wait %}checked{% endif %}

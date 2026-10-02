@@ -18,6 +18,9 @@ from .shelfmark_client import ShelfmarkError
 
 log = logging.getLogger(__name__)
 
+# Books that already have (or are getting) an ebook: never worth pre-searching.
+NOT_SEARCHABLE = ("queued", "downloading", "done")
+
 
 @dataclass
 class PreSearchStatus:
@@ -51,18 +54,23 @@ class PreSearcher:
         self._task: asyncio.Task | None = None
 
     # ---- control -----------------------------------------------------------------
-    def targets(self, count: int) -> list[dict[str, Any]]:
-        """The next ``count`` missing books (list order) that don't already have complete saved results."""
+    def targets(self, count: int, status: str | None = "missing", library_id: str | None = None,
+                q: str | None = None) -> list[dict[str, Any]]:
+        """The next ``count`` books of a Books-page view (same filters, same order) that still need an
+        ebook and don't already have complete saved results. ``status=None`` means "All"."""
         ready = self.service.state.searched_ids(self.service.s.search_cache_seconds, complete_only=True)
-        rows = self.service.state.list(status="missing")
-        return [r for r in rows if r["item_id"] not in ready][:max(0, count)]
+        rows = self.service.state.list(status=status or None, library_id=library_id or None, q=q or None,
+                                       limit=100_000)
+        return [r for r in rows
+                if r["status"] not in NOT_SEARCHABLE and r["item_id"] not in ready][:max(0, count)]
 
-    def start(self, count: int) -> bool:
+    def start(self, count: int, status: str | None = "missing", library_id: str | None = None,
+              q: str | None = None) -> bool:
         if self.status.running:
             return False
-        targets = self.targets(count)
+        targets = self.targets(count, status, library_id, q)
         self.status = PreSearchStatus(running=bool(targets), total=len(targets), started_at=time.time(),
-                                      message="" if targets else "Every missing book already has results ready.")
+                                      message="" if targets else "Every book shown already has results ready.")
         if targets:
             self._task = asyncio.create_task(self.run(targets))
         return bool(targets)

@@ -129,6 +129,35 @@ class Service:
     def unskip(self, item_id: str) -> None:
         self.state.update(item_id, status="missing", message="")
 
+    def give_up(self, item_id: str) -> None:
+        """Tried everything: park it for good (unlike "skipped", which means "later")."""
+        self.state.update(item_id, status="given_up", message="")
+
+    # Bulk actions on the Books page: action -> (statuses it applies to, new status).
+    # Queued/downloading/done books are never touched.
+    BULK_ACTIONS = {
+        "skip": (("missing", "failed", "given_up"), "skipped"),
+        "giveup": (("missing", "failed", "skipped"), "given_up"),
+        "restore": (("skipped", "given_up"), "missing"),
+    }
+
+    def bulk_set(self, item_ids: list[str], action: str) -> tuple[int, int]:
+        """Apply a bulk action. Returns (changed, left alone because their status doesn't allow it)."""
+        if action not in self.BULK_ACTIONS:
+            raise ValueError(f"Unknown bulk action {action!r}")
+        allowed, new_status = self.BULK_ACTIONS[action]
+        changed = ignored = 0
+        for item_id in dict.fromkeys(item_ids):
+            row = self.state.get(item_id)
+            if not row:
+                continue
+            if row["status"] in allowed:
+                self.state.update(item_id, status=new_status, message="")
+                changed += 1
+            elif row["status"] != new_status:
+                ignored += 1
+        return changed, ignored
+
     def unmatch(self, item_id: str) -> None:
         """Forget the chosen release (e.g. after a failed download) and put the book back as missing."""
         row = self.state.get(item_id)
@@ -310,11 +339,13 @@ class Service:
                           message="Cancelled from the queue")
 
     # ---- bulk queue: pre-searched perfect matches --------------------------------
-    def perfect_matches(self, limit: int | None = None) -> list[tuple[str, Candidate]]:
-        """Missing books (list order) whose saved search has a release scored 100 from an enabled
-        source: [(item_id, best such candidate)], at most ``limit``."""
+    def perfect_matches(self, limit: int | None = None, library_id: str | None = None,
+                        q: str | None = None) -> list[tuple[str, Candidate]]:
+        """Missing books (list order, optionally narrowed like the Books page) whose saved search has a
+        release scored 100 from an enabled source: [(item_id, best such candidate)], at most ``limit``.
+        Only "missing" books: skipped/given-up ones are never queued automatically."""
         out: list[tuple[str, Candidate]] = []
-        for row in self.state.list(status="missing", limit=100_000):
+        for row in self.state.list(status="missing", library_id=library_id or None, q=q or None, limit=100_000):
             hit = self.state.load_search(row["item_id"], self.default_query(row), self.s.search_cache_seconds)
             if not hit:
                 continue
@@ -325,9 +356,9 @@ class Service:
                     break
         return out
 
-    def queue_perfect(self, count: int) -> list[str]:
+    def queue_perfect(self, count: int, library_id: str | None = None, q: str | None = None) -> list[str]:
         """Enqueue the next ``count`` pre-searched books that have a 100-score release."""
-        picked = self.perfect_matches(max(0, count))
+        picked = self.perfect_matches(max(0, count), library_id, q)
         for item_id, cand in picked:
             self.enqueue(item_id, cand.raw)
         return [item_id for item_id, _ in picked]

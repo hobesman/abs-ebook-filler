@@ -7,7 +7,7 @@
     <select name="status" onchange="this.form.submit()" aria-label="Status">
       <option value="" {% if not f_status %}selected{% endif %}>All ({{ counts.values()|sum }})</option>
       {% for s in statuses %}
-      <option value="{{ s }}" {% if f_status == s %}selected{% endif %}>{{ s|capitalize }} ({{ counts[s] }})</option>
+      <option value="{{ s }}" {% if f_status == s %}selected{% endif %}>{{ status_label(s) }} ({{ counts[s] }})</option>
       {% endfor %}
     </select>
     {% if libraries|length > 1 %}
@@ -33,6 +33,19 @@
 </div>
 
 {% if pre_missing %}{% include "_presearch.html" %}{% endif %}
+
+<div id="bulk-bar" class="bulk-bar" hidden>
+  <strong><span id="bulk-count">0</span> selected</strong>
+  <button type="button" class="small secondary" hx-post="/bulk/skip" hx-include="#bulk-form"
+          title="Skip for now: come back to these later">Skip</button>
+  <button type="button" class="small secondary" hx-post="/bulk/giveup" hx-include="#bulk-form"
+          hx-confirm="Give up on the selected books? (You can restore them later from the Given up filter.)"
+          title="Tried everything: stop offering these">Give up</button>
+  <button type="button" class="small secondary outline" hx-post="/bulk/restore" hx-include="#bulk-form"
+          title="Put skipped or given-up books back to missing">Back to missing</button>
+  <button type="button" class="small outline contrast" id="bulk-clear">Clear selection</button>
+  <small class="muted">Queued, downloading and done books are left alone. Shift-click to select a range.</small>
+</div>
 {% endblock %}
 
 {% block content %}
@@ -49,12 +62,18 @@
 {% else %}
 <div class="layout">
   <section class="list">
+    <form id="bulk-form" onsubmit="return false">
     <table class="striped">
-      <thead><tr><th></th><th>Title</th><th>Author</th><th>Status</th></tr></thead>
+      <thead><tr>
+        <th class="sel"><input type="checkbox" id="select-all" aria-label="Select all books shown"
+                               title="Select all books shown"></th>
+        <th></th><th>Title</th><th>Author</th><th>Status</th>
+      </tr></thead>
       <tbody>
         {% for row in rows %}{% include "_row.html" %}{% endfor %}
       </tbody>
     </table>
+    </form>
   </section>
   <aside id="panel" class="panel"
          {% if open_id %}hx-get="/book/{{ open_id }}" hx-trigger="load" hx-swap="innerHTML"{% endif %}>

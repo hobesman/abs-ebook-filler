@@ -1,6 +1,8 @@
 <tr id="row-{{ row.item_id }}" data-item-id="{{ row.item_id }}" data-status="{{ row.status }}"
     hx-get="/row/{{ row.item_id }}" hx-swap="outerHTML"
     hx-trigger="row-changed[detail.value==='{{ row.item_id }}'] from:body">
+  <td class="sel"><input type="checkbox" class="row-sel" name="ids" value="{{ row.item_id }}"
+                         aria-label="Select {{ row.clean_title }}"></td>
   <td class="thumb"><img src="/cover/{{ row.item_id }}" alt="Cover" loading="lazy" class="zoomable"
                          data-zoom="/cover/{{ row.item_id }}?width=0" onerror="this.style.visibility='hidden'"></td>
   <td class="clickable" hx-get="/book/{{ row.item_id }}" hx-target="#panel" hx-swap="innerHTML" hx-trigger="click">
@@ -9,5 +11,5 @@
     {% if row.clean_title != row.title %}<small class="muted">{{ row.title }}</small>{% endif %}
   </td>
   <td>{{ row.author }}</td>
-  <td><span class="badge st-{{ row.status }}">{{ row.status }}</span></td>
+  <td><span class="badge st-{{ row.status }}">{{ status_label(row.status)|lower }}</span></td>
 </tr>

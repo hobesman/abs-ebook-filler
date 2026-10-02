@@ -115,6 +115,32 @@ def test_queue_perfect_picks_enabled_100s_in_list_order(service, library):
     assert [i for i, _ in service.perfect_matches()] == ["b6"]  # queued books no longer count
 
 
+def test_queue_perfect_follows_filter(service, library):
+    add_books(service, library, ["Alpha One", "Beta Two"])
+    save_result(service, "Alpha One", cand(100, sid="a"))
+    save_result(service, "Beta Two", cand(100, sid="b"))
+    assert [i for i, _ in service.perfect_matches(q="Beta")] == ["Beta Two"]
+    assert service.queue_perfect(5, q="Beta") == ["Beta Two"]
+    assert service.state.get("Alpha One")["status"] == "missing"
+
+
+@respx.mock
+def test_presearch_controls_carry_the_current_filter(settings, service, library):
+    respx.get("http://abs/api/libraries").mock(return_value=httpx.Response(200, json={"libraries": []}))
+    add_books(service, library, ["Alpha One", "Beta Two"])
+    app = create_app(settings, service)
+    with TestClient(app) as c:
+        c.auth = ("admin", "pw")
+        page = c.get("/", params={"q": "Beta"}).text
+        assert '<input type="hidden" name="q" value="Beta">' in page
+        assert "0 of 1 books in this list have results ready" in page
+        frag = c.get("/presearch/status", params={"status": "missing", "q": "Beta"}).text
+        assert "0 of 1 books in this list" in frag
+        r = c.post("/queue-perfect", data={"count": "3", "q": "Beta"},
+                   headers={"HX-Current-URL": "http://x/?q=Beta"})
+        assert r.headers["HX-Redirect"].startswith("/?q=Beta&flash=")
+
+
 # ---- web ---------------------------------------------------------------------------
 @respx.mock
 def test_cancel_and_queue_perfect_routes(settings, service, library):

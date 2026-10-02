@@ -67,7 +67,11 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
 ## Using the web UI
 
 - **Books** – your tracked audiobooks; the status dropdown defaults to *Missing* (no ebook yet) and can show
-  queued, done, skipped, failed or all. The top bar (with the filters and pre-search) stays pinned while you
+  queued, done, skipped, given up, failed or all. **Skipped** means "not now, come back later"; **Given up**
+  means "tried everything, leave it alone". Neither is searched, pre-searched, auto-retried or offered in
+  rapid mode; **Restore** / **Back to missing** brings them back. Tick books (shift-click for a range, or the
+  header box for all shown) to **Skip**, **Give up** or move them **Back to missing** in bulk; queued,
+  downloading and done books are never changed. The top bar (with the filters and pre-search) stays pinned while you
   scroll. Click a title to open its panel: Shelfmark is searched
   automatically with the cleaned title + author. Edit the query and search again if needed, then **Download** a
   release, or **Skip** the book (skipped books stay hidden until you un-skip them).
@@ -76,7 +80,10 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   and applies to every book, rapid mode and the CLI. Hidden sources are filtered before the top-N cut, so the
   next-best results from enabled sources fill the list. Toggling doesn't re-run the search.
 - **Pre-search** – "Pre-search the next [100] missing books" (above the list) searches books ahead of time,
-  top of the list first, skipping ones that already have results. It runs one search at a time with a short
+  top of the list first, skipping ones that already have results. It follows the list you're looking at:
+  search for an author (or pick a library or status, e.g. *Skipped*) and it pre-searches those books instead
+  (never ones already queued, downloading or done). The 100-score queue button and the ⚡/💯 counts follow
+  the same filter, but only ever queue *missing* books. It runs one search at a time with a short
   pause (`PRESEARCH_DELAY`), pauses while you're searching, and waits out Anna's Archive rate-limit cooldowns
   and retries. Books with results ready get a ⚡ and open instantly; results are kept `SEARCH_CACHE_HOURS`
   (24 h). Every normal search is saved the same way. Start it, go do something else, then work through the

@@ -159,6 +159,31 @@ async def test_service_releases_slot_when_download_fails(service, library):
 
 
 @respx.mock
+async def test_status_separates_reported_and_held_and_reports_what_check_did(service):
+    q = quota(service)
+    respx.get(AA).mock(return_value=httpx.Response(200, json=info(1, 2, [A])))
+    q.reserve(A)
+    await q.refresh()
+    q.reserve(B)  # a book Shelfmark is working on
+    s = q.status()
+    assert s["reported_left"] == 1 and s["held"] == 1 and s["left"] == 0 and s["last_result"] == "ok"
+    q.release(B)
+    q2 = quota(service, Clock(10_000_000.0))  # much later: nothing safe to ask about
+    await q2.refresh()
+    assert q2.status()["last_result"] == "no_free_check"
+
+
+@respx.mock
+async def test_connection_error_reason_is_shown_without_the_key(service):
+    q = quota(service)
+    q.reserve(A)
+    respx.get(AA).mock(side_effect=httpx.ConnectError("[Errno -3] Temporary failure in name resolution"))
+    await q.refresh()
+    err = q.status()["error"]
+    assert "name resolution" in err and "KEY" not in err
+
+
+@respx.mock
 async def test_bad_key_reported(service):
     q = quota(service)
     q.reserve(A)
@@ -181,7 +206,8 @@ def test_activity_controls_show_quota_and_toggle(settings, service):
     with TestClient(app) as c:
         c.auth = ("admin", "pw")
         ctl = c.post("/aa/check").text  # probes with that book's md5
-        assert ">24</strong> / 25 left" in ctl
+        assert '<strong class="">24</strong> available' in ctl
+        assert "Anna's Archive said <strong>24</strong> of 25 left" in ctl
         assert route.calls[-1].request.url.params["md5"] == A
         ctl = c.post("/aa/wait", data={"enabled": "true"}).text
         assert service.aa_wait_enabled() and "checked" in ctl

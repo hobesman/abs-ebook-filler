@@ -110,7 +110,7 @@
     if (rapidOn()) prefetchAfter(id);
   });
 
-  const ACTION_RE = /^\/book\/([^/]+)\/(download\/\d+|skip)$/;
+  const ACTION_RE = /^\/book\/([^/]+)\/(download\/\d+|skip|giveup)$/;
   document.body.addEventListener("htmx:afterRequest", (e) => {
     if (!rapidOn() || !e.detail.successful) return;
     const path = (e.detail.pathInfo && e.detail.pathInfo.requestPath) || "";
@@ -119,7 +119,7 @@
     const itemId = decodeURIComponent(m[1]);
     const row = document.getElementById("row-" + itemId);
     const title = row ? row.querySelector(".t").textContent.replace("⚡", "").trim() : "book";
-    toast((m[2] === "skip" ? "Skipped: " : "Queued: ") + title);
+    toast(({ skip: "Skipped: ", giveup: "Gave up: " }[m[2]] || "Queued: ") + title);
     // Let htmx finish swapping the panel/row before moving on.
     setTimeout(() => openNext(itemId), 50);
   });
@@ -163,6 +163,53 @@
   document.body.addEventListener("htmx:afterSettle", (e) => {
     if (e.detail.target && e.detail.target.id === "cands") maybeAutoDownload();
   });
+
+  // ---------- Books: bulk select ----------
+  // Row checkboxes live in #bulk-form; the bar (in the sticky top bar) posts the ticked ones.
+  const bulkBar = document.getElementById("bulk-bar");
+  const selectAll = document.getElementById("select-all");
+  let lastClicked = null;
+
+  function rowBoxes() { return Array.from(document.querySelectorAll("#bulk-form input.row-sel")); }
+
+  function updateBulk() {
+    if (!bulkBar) return;
+    const boxes = rowBoxes();
+    const n = boxes.filter((b) => b.checked).length;
+    document.getElementById("bulk-count").textContent = n;
+    bulkBar.hidden = n === 0;
+    if (selectAll) {
+      selectAll.checked = n > 0 && n === boxes.length;
+      selectAll.indeterminate = n > 0 && n < boxes.length;
+    }
+  }
+
+  if (bulkBar) {
+    document.addEventListener("click", (e) => {
+      const box = e.target.closest && e.target.closest("input.row-sel");
+      if (!box) return;
+      const boxes = rowBoxes();
+      if (e.shiftKey && lastClicked && lastClicked !== box && boxes.includes(lastClicked)) {
+        const [a, b] = [boxes.indexOf(lastClicked), boxes.indexOf(box)].sort((x, y) => x - y);
+        boxes.slice(a, b + 1).forEach((x) => { x.checked = box.checked; });
+      }
+      lastClicked = box;
+      updateBulk();
+    });
+    if (selectAll) {
+      selectAll.addEventListener("change", () => {
+        rowBoxes().forEach((b) => { b.checked = selectAll.checked; });
+        updateBulk();
+      });
+    }
+    document.getElementById("bulk-clear").addEventListener("click", () => {
+      rowBoxes().forEach((b) => { b.checked = false; });
+      updateBulk();
+    });
+    // A row refreshed by htmx comes back unticked: keep the count honest.
+    document.body.addEventListener("htmx:afterSwap", updateBulk);
+    updateBulk();
+  }
 
   // ---------- Activity: drag-and-drop queue order ----------
   // Rows a worker has already started aren't draggable (no "movable" class). While a drag is in

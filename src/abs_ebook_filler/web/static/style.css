@@ -44,6 +44,16 @@ td.clickable:hover .t { text-decoration: underline; }
 .st-downloading { background: #7c3aed; }
 .st-done { background: #16a34a; }
 .st-skipped { background: #a8a29e; color: #1c1917; }
+.st-given_up { background: #44403c; color: #e7e5e4; }
+
+/* bulk select */
+th.sel, td.sel { width: 2rem; padding-right: 0; }
+td.sel input, th.sel input { margin: 0; }
+.bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .75rem; margin-top: .5rem;
+            padding: .4rem .75rem; border-radius: var(--pico-border-radius);
+            background: color-mix(in srgb, var(--pico-primary) 12%, transparent); }
+.bulk-bar[hidden] { display: none; }
+.bulk-bar button { margin: 0; width: auto; }
 .st-failed { background: #dc2626; }
 
 .book-head { display: flex; gap: 1rem; align-items: flex-start; }
@@ -95,6 +105,7 @@ tr.drag-ghost td { opacity: .45; background: color-mix(in srgb, var(--pico-prima
 .paused-note { color: #ca8a04; font-weight: 600; }
 .aa-count strong { color: var(--pico-primary); }
 .aa-count strong.aa-zero { color: #dc2626; }
+.aa-note.ok { color: #16a34a; }
 .paused-badge { font-size: .8em; margin-left: .2rem; }
 table.activity td { vertical-align: middle; overflow-wrap: anywhere; }
 /* Cap detail at two lines (full text on hover) so rows don't grow and shrink as the message changes */

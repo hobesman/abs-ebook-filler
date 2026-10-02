@@ -98,7 +98,7 @@ def test_presearch_controls_and_ready_marker(settings, service):
         page = c.get("/").text
         assert 'class="ready"' in page and "1 of 1 missing books have results ready" in page
         frag = c.post("/presearch", data={"count": "5"}).text
-        assert "Every missing book already has results ready" in frag
+        assert "Every book shown already has results ready" in frag
         assert c.get("/presearch/status").status_code == 200
 
 

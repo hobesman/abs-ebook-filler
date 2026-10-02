@@ -9,7 +9,7 @@
         {% if row.clean_title != row.title %}<small>ABS title: {{ row.title }}</small><br>{% endif %}
         <small><code>{{ row.path }}</code></small>
       </p>
-      <span class="badge st-{{ row.status }}">{{ row.status }}</span>
+      <span class="badge st-{{ row.status }}">{{ status_label(row.status)|lower }}</span>
       {% if row.message %}<small class="muted"> {{ row.message }}</small>{% endif %}
     </div>
   </header>
@@ -49,10 +49,17 @@
   {% endif %}
 
   <footer class="actions">
-    {% if row.status == "skipped" %}
-      <button class="secondary" hx-post="/book/{{ row.item_id }}/unskip" hx-target="#panel">Un-skip</button>
-    {% elif row.status in ("missing", "failed") %}
-      <button class="secondary outline" hx-post="/book/{{ row.item_id }}/skip" hx-target="#panel">Skip this book</button>
+    {% if row.status in ("skipped", "given_up") %}
+      <button class="secondary" hx-post="/book/{{ row.item_id }}/unskip" hx-target="#panel"
+              title="Put this book back to missing">{{ "Un-skip" if row.status == "skipped" else "Restore" }}</button>
+    {% endif %}
+    {% if row.status in ("missing", "failed", "given_up") %}
+      <button class="secondary outline" hx-post="/book/{{ row.item_id }}/skip" hx-target="#panel"
+              title="Not now: come back to it later">Skip for now</button>
+    {% endif %}
+    {% if row.status in ("missing", "failed", "skipped") %}
+      <button class="secondary outline" hx-post="/book/{{ row.item_id }}/giveup" hx-target="#panel"
+              title="Tried everything: stop offering this book">Give up</button>
     {% endif %}
   </footer>
 </article>

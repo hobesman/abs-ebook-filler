@@ -9,7 +9,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -20,15 +20,16 @@ from fastapi.templating import Jinja2Templates
 from ..core.config import Settings, get_settings
 from ..core.autoretry import AutoRetry
 from ..core.models import SearchResult
-from ..core.presearch import PreSearcher, is_rate_limit
+from ..core.presearch import NOT_SEARCHABLE, PreSearcher, is_rate_limit
 from ..core.service import Service
 from ..core.shelfmark_client import ShelfmarkError
-from ..core.state import STATUSES, source_key
+from ..core.state import STATUSES, source_key, status_label
 from .worker import Worker
 
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
+templates.env.globals["status_label"] = status_label
 security = HTTPBasic(realm="abs-ebook-filler")
 SEARCH_CACHE_SECONDS = 15 * 60  # in-memory task reuse; saved results in SQLite last SEARCH_CACHE_HOURS
 
@@ -152,39 +153,58 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return templates.TemplateResponse(request, "index.html", ctx(
             request, rows=rows, counts=s.state.counts(), statuses=STATUSES,
             f_status=status, f_library=library, f_q=q, flash=flash, open_id=open_id,
-            ready=_ready(s), **_presearch_ctx(request)))
+            ready=_ready(s), **_presearch_ctx(request, status, library, q)))
 
     # ---- pre-search --------------------------------------------------------------
-    def _presearch_ctx(request: Request) -> dict:
+    # Pre-search, the 100-score queue button and their counts all follow the Books page's current
+    # view (status / library / title-author filter); the fragment carries those filters along.
+    def _presearch_ctx(request: Request, status: str = "missing", library: str = "", q: str = "") -> dict:
         s = svc(request)
         ready = s.state.searched_ids(s.s.search_cache_seconds, complete_only=True)
-        missing = {r["item_id"] for r in s.state.list(status="missing")}
+        shown = {r["item_id"] for r in s.state.list(status=status or None, library_id=library or None,
+                                                     q=q or None, limit=100_000)
+                 if r["status"] not in NOT_SEARCHABLE}
         pre = request.app.state.presearch.status.to_dict()
         return {"pre": pre,
-                "pre_ready": len(ready & missing), "pre_missing": len(missing),
+                "pre_ready": len(ready & shown), "pre_missing": len(shown),
+                "pre_filtered": bool(q or library or status != "missing"),
+                "pf_status": status, "pf_library": library, "pf_q": q,
+                "pre_qs": urlencode({"status": status, "library": library, "q": q}),
                 "pre_default": s.s.presearch_count, "cache_hours": s.s.search_cache_hours,
                 # Reading every saved result isn't free, so skip it on the 3-second refresh while
                 # pre-search runs (shown again when it finishes).
-                "pre_perfect": None if pre["running"] else len(s.perfect_matches())}
+                "pre_perfect": None if pre["running"] else len(s.perfect_matches(library_id=library or None,
+                                                                                   q=q or None))}
 
-    def _presearch_fragment(request: Request):
-        return templates.TemplateResponse(request, "_presearch.html", ctx(request, **_presearch_ctx(request)))
+    def _presearch_fragment(request: Request, status: str, library: str, q: str):
+        return templates.TemplateResponse(request, "_presearch.html",
+                                          ctx(request, **_presearch_ctx(request, status, library, q)))
 
     @r.post("/presearch", response_class=HTMLResponse)
-    async def presearch_start(request: Request, count: int = Form(100)):
-        request.app.state.presearch.start(max(1, min(count, 2000)))
-        return _presearch_fragment(request)
+    async def presearch_start(request: Request, count: int = Form(100), status: str = Form("missing"),
+                              library: str = Form(""), q: str = Form("")):
+        request.app.state.presearch.start(max(1, min(count, 2000)), status or None, library or None, q or None)
+        return _presearch_fragment(request, status, library, q)
 
     @r.post("/presearch/stop", response_class=HTMLResponse)
-    async def presearch_stop(request: Request):
+    async def presearch_stop(request: Request, status: str = Form("missing"), library: str = Form(""),
+                             q: str = Form("")):
         pre = request.app.state.presearch
         pre.stop()
         await pre.wait()
-        return _presearch_fragment(request)
+        return _presearch_fragment(request, status, library, q)
 
     @r.get("/presearch/status", response_class=HTMLResponse)
-    async def presearch_status(request: Request):
-        return _presearch_fragment(request)
+    async def presearch_status(request: Request, status: str = "missing", library: str = "", q: str = ""):
+        return _presearch_fragment(request, status, library, q)
+
+    def _redirect_back(request: Request, msg: str) -> Response:
+        """HX-Redirect to the page the request came from (same filters), with a flash message."""
+        parts = urlsplit(request.headers.get("HX-Current-URL") or "/")
+        query = [(k, v) for k, v in parse_qsl(parts.query) if k not in ("flash", "open")] + [("flash", msg)]
+        resp = Response(status_code=204)
+        resp.headers["HX-Redirect"] = (parts.path or "/") + "?" + urlencode(query)
+        return resp
 
     @r.post("/scan")
     async def scan(request: Request):
@@ -314,10 +334,29 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
 
     @r.post("/book/{item_id}/unskip", response_class=HTMLResponse)
     async def unskip(request: Request, item_id: str):
-        svc(request).unskip(item_id)
+        svc(request).unskip(item_id)  # also "Restore" for given-up books: back to missing
         resp = _panel(request, item_id)
         resp.headers["HX-Trigger"] = json.dumps({"row-changed": item_id})
         return resp
+
+    @r.post("/book/{item_id}/giveup", response_class=HTMLResponse)
+    async def giveup(request: Request, item_id: str):
+        svc(request).give_up(item_id)
+        resp = _panel(request, item_id, note="Given up")
+        resp.headers["HX-Trigger"] = json.dumps({"row-changed": item_id})
+        return resp
+
+    @r.post("/bulk/{action}")
+    async def bulk(request: Request, action: str, ids: list[str] = Form([])):
+        """Books page: Skip / Give up / Back to missing for the ticked books, then reload the same view."""
+        labels = {"skip": "Skipped", "giveup": "Gave up on", "restore": "Moved back to missing"}
+        if action not in labels:
+            raise HTTPException(404, "Unknown action")
+        changed, ignored = svc(request).bulk_set(ids, action)
+        msg = f"{labels[action]} {changed} book{'' if changed == 1 else 's'}."
+        if ignored:
+            msg += f" {ignored} left as they were (queued, downloading, done or not applicable)."
+        return _redirect_back(request, msg)
 
     @r.get("/row/{item_id}", response_class=HTMLResponse)
     async def row(request: Request, item_id: str):
@@ -351,6 +390,8 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
                 "aa": aa, "aa_wait": s.aa_wait_enabled(),
                 "aa_checked_ago": (_ago(aa["checked_at"]) or "just now") if aa["checked_at"] else "",
                 "aa_frees_in": _until(aa["next_free_at"]) if aa["next_free_at"] else "",
+                # ↻ feedback: show what the last check did for a minute and a half after it ran
+                "aa_just_checked": bool(aa["last_attempt_at"]) and time.time() - aa["last_attempt_at"] < 90,
                 "aa_waiting": sum(1 for r in s.state.active()
                                   if r["status"] == "queued" and "fast download slot" in (r["message"] or ""))}
 
@@ -427,10 +468,12 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return await activity_rows(request)
 
     @r.post("/queue-perfect")
-    async def queue_perfect(request: Request, count: int = Form(10)):
-        """Books page: enqueue the next N pre-searched books with a 100-score enabled-source match."""
+    async def queue_perfect(request: Request, count: int = Form(10), library: str = Form(""),
+                            q: str = Form("")):
+        """Books page: enqueue the next N pre-searched missing books (of the current view) that have a
+        100-score enabled-source match."""
         count = max(1, min(count, 2000))
-        ids = svc(request).queue_perfect(count)
+        ids = svc(request).queue_perfect(count, library or None, q or None)
         for item_id in ids:
             request.app.state.worker.submit(item_id)
         msg = f"Queued {len(ids)} book(s) with a 100-score match."
@@ -438,9 +481,7 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
             msg += (f" Only {len(ids)} pre-searched book(s) had one"
                     " - pre-search more books to find others." if ids else
                     " No pre-searched book has one right now - pre-search more books first.")
-        resp = Response(status_code=204)
-        resp.headers["HX-Redirect"] = "/?" + urlencode({"flash": msg})
-        return resp
+        return _redirect_back(request, msg)
 
     @r.post("/queue/{item_id}/next", response_class=HTMLResponse)
     async def queue_next(request: Request, item_id: str):

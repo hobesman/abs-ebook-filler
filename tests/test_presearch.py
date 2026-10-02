@@ -61,6 +61,27 @@ async def test_presearch_searches_in_order_and_saves(service):
     assert [t["item_id"] for t in pre.targets(100)] == ["li_3"]
 
 
+async def test_presearch_targets_follow_the_books_page_filter(service):
+    from abs_ebook_filler.core.models import Book
+
+    service.state.sync_missing([
+        Book(item_id=i, library_id=lib, title=t, clean_title=t, author=a, path=f"/audiobooks/{i}")
+        for i, lib, t, a in [("1", "L1", "Dune", "Frank Herbert"), ("2", "L1", "Emma", "Jane Austen"),
+                             ("3", "L2", "Dune Messiah", "Frank Herbert"), ("4", "L1", "Persuasion", "Jane Austen"),
+                             ("5", "L1", "Children of Dune", "Frank Herbert")]])
+    service.state.update("4", status="skipped")
+    service.state.update("5", status="done")
+    pre = PreSearcher(service)
+    ids = lambda rows: sorted(r["item_id"] for r in rows)  # noqa: E731
+
+    assert ids(pre.targets(100)) == ["1", "2", "3"]                           # default: missing books
+    assert ids(pre.targets(100, q="Herbert")) == ["1", "3"]                   # author search
+    assert ids(pre.targets(100, q="Herbert", library_id="L1")) == ["1"]       # + library
+    assert ids(pre.targets(100, status="skipped")) == ["4"]                   # "come back later" books
+    assert ids(pre.targets(100, status=None, q="Dune")) == ["1", "3"]         # All: done book left out
+    assert pre.targets(100, status="done") == []
+
+
 @respx.mock
 async def test_presearch_waits_out_rate_limit_and_retries(service):
     mock_abs(1)

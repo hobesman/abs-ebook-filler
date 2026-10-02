@@ -85,6 +85,9 @@ class AnnasQuota:
         d.setdefault("pending", {})
         d.setdefault("zero_until", 0.0)
         d.setdefault("error", "")
+        d.setdefault("reported_left", None)   # Anna's Archive's own downloads_left at the last check
+        d.setdefault("last_result", "")       # what the last check did: ok / out / no_free_check / error
+        d.setdefault("last_attempt_at", 0.0)
         now = self._clock()
         d["recent"] = {m: e for m, e in d["recent"].items() if now < e["hi"] + WINDOW}
         d["pending"] = {m: t for m, t in d["pending"].items()
@@ -145,9 +148,13 @@ class AnnasQuota:
         return min(times) if times else None
 
     def status(self) -> dict[str, Any]:
+        """``left`` is what the app will act on: Anna's Archive's number, minus slots ``held`` for
+        books Shelfmark is working on, plus any that have certainly freed up since ``checked_at``."""
         d = self._data()
         return {"configured": self.configured, "left": self.left(), "per_day": d["per_day"],
-                "checked_at": d["checked_at"], "error": d["error"], "next_free_at": self.next_free_at()}
+                "reported_left": d["reported_left"], "held": len(d["pending"]),
+                "checked_at": d["checked_at"], "error": d["error"], "next_free_at": self.next_free_at(),
+                "last_result": d["last_result"], "last_attempt_at": d["last_attempt_at"]}
 
     def _safe_probe_md5(self, d: dict[str, Any]) -> str | None:
         """Newest md5 that is certainly still inside Anna's Archive's window (probing it is free)."""
@@ -174,16 +181,21 @@ class AnnasQuota:
             first_check = (downloaded or "").lower() if d["per_day"] is None else ""
             md5 = (self._safe_probe_md5(d) or newest_pending or (next_wanted or "").lower()
                    or first_check or None)
+            d["last_attempt_at"] = self._clock()
             if not md5:
                 if not d["recent"] and not d["pending"] and d["per_day"] is not None:
                     d["zero_until"] = 0.0  # nothing in the window: the full allowance is available
-                    self._save(d)
+                    d["reported_left"] = d["per_day"]
+                d["last_result"] = "no_free_check"
+                self._save(d)
                 return self.status()
             try:
                 r = await self._http.get("/dyn/api/fast_download.json", params={"md5": md5, "key": self.key})
                 body = r.json() if r.content else {}
             except (httpx.HTTPError, ValueError) as e:
-                d["error"] = f"Couldn't check Anna's Archive ({type(e).__name__})"
+                reason = (str(e).strip() or type(e).__name__).replace(self.key, "***")
+                d["error"] = f"Couldn't check Anna's Archive: {reason[:150]}"
+                d["last_result"] = "error"
                 self._save(d)
                 return self.status()
             info = body.get("account_fast_download_info") if isinstance(body, dict) else None
@@ -196,17 +208,21 @@ class AnnasQuota:
                     # Anna's Archive returns are from before it): record it.
                     d["recent"][md5] = {"lo": now - 60, "hi": now}
                     d["pending"].pop(md5, None)
+                    d["reported_left"] = max(0, (d["reported_left"] or 0) - 1)
             elif r.status_code == 429 and error.lower() == "no downloads left":
                 # Only possible for an md5 outside the window, and nothing was counted.
                 d["recent"].pop(md5, None)
                 d["zero_until"] = now + 600
                 d["checked_at"], d["error"] = now, ""
+                d["reported_left"], d["last_result"] = 0, "out"
             elif r.status_code == 401:
                 d["error"] = "Anna's Archive rejected the key (check ANNAS_ARCHIVE_KEY)"
             elif r.status_code == 403:
                 d["error"] = "Anna's Archive says this key has no active membership"
             else:
                 d["error"] = f"Anna's Archive answered {r.status_code}: {error or r.text[:120]}"
+            if d["error"]:
+                d["last_result"] = "error"
             self._save(d)
         self._changed()
         return self.status()
@@ -225,5 +241,6 @@ class AnnasQuota:
         d["recent"] = recent
         d["pending"] = {m: t for m, t in d["pending"].items() if m not in recent}
         d["per_day"] = int(info.get("downloads_per_day") or 0)
+        d["reported_left"] = int(info.get("downloads_left") or 0)
         d["zero_until"] = 0.0
-        d["checked_at"], d["error"] = now, ""
+        d["checked_at"], d["error"], d["last_result"] = now, "", "ok"

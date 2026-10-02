@@ -11,7 +11,13 @@ from typing import Any, Iterable
 
 from .models import Book
 
-STATUSES = ("missing", "queued", "downloading", "done", "skipped", "failed")
+# skipped = "not now, come back to it later"; given_up = "tried everything, leave it alone".
+STATUSES = ("missing", "queued", "downloading", "done", "skipped", "given_up", "failed")
+STATUS_LABELS = {"given_up": "Given up"}
+
+
+def status_label(status: str) -> str:
+    return STATUS_LABELS.get(status, (status or "").replace("_", " ").capitalize())
 ACTIVE = ("queued", "downloading")
 
 _SCHEMA = """
@@ -109,7 +115,7 @@ class State:
                      b.path, now, now),
                 )
             existing = [r[0] for r in self._conn.execute(
-                "SELECT item_id FROM items WHERE status IN ('missing','skipped','failed')")]
+                "SELECT item_id FROM items WHERE status IN ('missing','skipped','given_up','failed')")]
             stale = [i for i in existing if i not in seen]
             self._conn.executemany("DELETE FROM items WHERE item_id=?", [(i,) for i in stale])
             self._conn.commit()

@@ -1,5 +1,7 @@
+{# Follows the Books page's current view: pf_status / pf_library / pf_q ride along on every request. #}
+{% set view_vals %}{"status": {{ pf_status|tojson }}, "library": {{ pf_library|tojson }}, "q": {{ pf_q|tojson }}}{% endset %}
 <div id="presearch" class="presearch"
-     {% if pre.running %}hx-get="/presearch/status" hx-trigger="every 3s[!this.contains(document.activeElement)]" hx-swap="outerHTML"{% endif %}>
+     {% if pre.running %}hx-get="/presearch/status?{{ pre_qs }}" hx-trigger="every 3s[!this.contains(document.activeElement)]" hx-swap="outerHTML"{% endif %}>
   <div class="pre-row">
   {% if pre.running %}
     <span aria-busy="true"></span>
@@ -16,17 +18,20 @@
     </span>
     <progress value="{{ pre.done }}" max="{{ pre.total }}"></progress>
     <button class="small secondary outline" hx-post="/presearch/stop" hx-target="#presearch"
-            hx-swap="outerHTML">Stop</button>
+            hx-swap="outerHTML" hx-vals='{{ view_vals }}'>Stop</button>
   {% else %}
     <form hx-post="/presearch" hx-target="#presearch" hx-swap="outerHTML"
-          title="Search books ahead of time, one at a time, so they open instantly in rapid mode. Results are kept {{ cache_hours|round|int }} h.">
+          title="Search the books in the list below ahead of time (top first, same filter), one at a time, so they open instantly in rapid mode. Books already queued, downloading or done are left out. Results are kept {{ cache_hours|round|int }} h.">
+      <input type="hidden" name="status" value="{{ pf_status }}">
+      <input type="hidden" name="library" value="{{ pf_library }}">
+      <input type="hidden" name="q" value="{{ pf_q }}">
       <span>Pre-search the next</span>
       <input type="number" name="count" value="{{ pre_default }}" min="1" max="2000" aria-label="Number of books">
-      <span>missing books</span>
+      <span>{% if pre_filtered %}books in this list{% else %}missing books{% endif %}</span>
       <button type="submit" class="small">Start</button>
     </form>
     <small class="muted">
-      ⚡ {{ pre_ready }} of {{ pre_missing }} missing books have results ready
+      ⚡ {{ pre_ready }} of {{ pre_missing }} {% if pre_filtered %}books in this list{% else %}missing books{% endif %} have results ready
       {% if pre.message %} · {{ pre.message }}{% if pre.failed or pre.partial %} ({{ pre.failed }} failed, {{ pre.partial }} incomplete){% endif %}{% endif %}
     </small>
   {% endif %}
@@ -34,16 +39,18 @@
 
   <div class="pre-row">
     <form hx-post="/queue-perfect" hx-disabled-elt="find button"
-          title="Queue pre-searched books whose results include a release scored 100 from an enabled (not hidden) source, top of the list first.">
+          title="Queue pre-searched missing books from this list whose results include a release scored 100 from an enabled (not hidden) source, top of the list first. Skipped and given-up books are never queued this way.">
+      <input type="hidden" name="library" value="{{ pf_library }}">
+      <input type="hidden" name="q" value="{{ pf_q }}">
       <span>Add the next</span>
       <input type="number" name="count" value="{{ [pre_perfect, 10]|min if pre_perfect else 10 }}" min="1" max="2000"
              aria-label="Number of books to queue">
-      <span>100-score books to the queue</span>
+      <span>100-score books{% if pf_q or pf_library %} from this list{% endif %} to the queue</span>
       <button type="submit" class="small" {% if pre_perfect == 0 %}disabled{% endif %}>Queue</button>
     </form>
     <small class="muted">
       {% if pre_perfect is none %}(count shown when pre-search finishes)
-      {% else %}💯 {{ pre_perfect }} pre-searched book{{ "" if pre_perfect == 1 else "s" }} ready with a 100 match{% endif %}
+      {% else %}💯 {{ pre_perfect }} pre-searched {{ "missing " if pf_q or pf_library else "" }}book{{ "" if pre_perfect == 1 else "s" }} ready with a 100 match{% endif %}
     </small>
   </div>
 </div>
