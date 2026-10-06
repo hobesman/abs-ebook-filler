@@ -79,7 +79,10 @@ table.activity col.c-book { width: 32%; }
 table.activity col.c-status { width: 8.5rem; }
 table.activity col.c-progress { width: 18%; }
 table.activity col.c-actions { width: 17rem; }
-table.activity col.c-grip { width: 4.5rem; }
+table.activity col.c-grip { width: 8rem; }
+.pos { display: inline-block; min-width: 2.2rem; text-align: right; margin-right: .15rem; font-variant-numeric: tabular-nums; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .6rem; margin: .4rem 0 .6rem; }
+.pager button { margin: 0; width: auto; }
 table.activity col.c-x { width: 3rem; }
 table.activity td.x-cell { text-align: center; padding-left: 0; padding-right: 0; }
 .cancel-x { width: auto; margin: 0; padding: .1rem .45rem; line-height: 1.2; font-weight: 700;

@@ -56,6 +56,7 @@ class AnnasQuota:
                                        follow_redirects=True)
         self._lock = asyncio.Lock()
         self._listeners: list[Callable[[], Any]] = []
+        self._cache: dict[str, Any] | None = None
 
     @property
     def configured(self) -> bool:
@@ -78,7 +79,11 @@ class AnnasQuota:
     # recent: md5 -> {"lo": earliest possible download time, "hi": latest possible download time}
     # pending: md5 -> time we handed it to Shelfmark (not yet seen in Anna's Archive's list)
     def _data(self) -> dict[str, Any]:
-        d = dict(self.state.get_pref(PREF) or {})
+        # Kept in memory after the first read (the stored record is small but re-reading and parsing
+        # it for every queued book made the scheduler slow); saved through to the database.
+        if self._cache is None:
+            self._cache = dict(self.state.get_pref(PREF) or {})
+        d = dict(self._cache)
         d.setdefault("per_day", None)
         d.setdefault("checked_at", 0.0)
         d.setdefault("recent", {})
@@ -95,16 +100,31 @@ class AnnasQuota:
         return d
 
     def _save(self, d: dict[str, Any]) -> None:
+        self._cache = dict(d)
         self.state.set_pref(PREF, d)
 
-    def left(self) -> int | None:
-        """Fast downloads left right now (conservative estimate between checks); None if unknown."""
-        d = self._data()
+    def _left(self, d: dict[str, Any]) -> int | None:
         if self._clock() < d["zero_until"]:  # Anna's Archive just said "No downloads left"
             return 0
         if d["per_day"] is None:
             return None
         return max(0, int(d["per_day"]) - len(d["recent"]) - len(d["pending"]))
+
+    def left(self) -> int | None:
+        """Fast downloads left right now (conservative estimate between checks); None if unknown."""
+        return self._left(self._data())
+
+    def blocked_md5s_checker(self) -> Callable[[str], bool]:
+        """For one pass over the queue: a cheap in-memory test "would this md5 have to wait?".
+        Reads the record once instead of once per book."""
+        if not self.configured:
+            return lambda md5: False
+        d = self._data()
+        left = self._left(d)
+        if left is None or left > 0:
+            return lambda md5: False
+        counted = set(d["recent"]) | set(d["pending"])  # already counted: asking again is free
+        return lambda md5: md5 not in counted
 
     def slot_available(self, md5: str) -> bool:
         """Would sending this md5 to Shelfmark get a fast download right now? (unknown -> yes)"""

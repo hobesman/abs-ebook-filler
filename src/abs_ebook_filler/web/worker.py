@@ -32,7 +32,7 @@ class Worker:
         self._wake: asyncio.TimerHandle | None = None  # fires when a pause ends
         self._jobs: dict[str, asyncio.Task] = {}       # item_id -> its running Service.process task
         self._release: dict[str, dict] = {}            # item_id -> chosen release (while waiting)
-        self._aa_noted: set[str] = set()               # waiting rows already labelled "waiting for a slot"
+        self._aa_blocked: set[str] = set()             # held back waiting for a fast-download slot
         self._aa_wake: asyncio.TimerHandle | None = None
         service.aa.on_change(self._changed.set)        # new fast-download numbers: re-check the queue
 
@@ -82,9 +82,24 @@ class Worker:
         return set(self._running)
 
     def reorder(self, item_ids: list[str]) -> None:
-        """Make the waiting list follow this order; books not listed keep their relative place after."""
-        rank = {item_id: n for n, item_id in enumerate(item_ids)}
-        self._waiting.sort(key=lambda i: rank.get(i, len(rank)))
+        """Put these books in this order, within the queue positions they already occupy (everything
+        else stays exactly where it is) - matches State.reorder_queue, and works for one page."""
+        wanted = set(item_ids)
+        slots = [i for i, item_id in enumerate(self._waiting) if item_id in wanted]
+        present = set(self._waiting[i] for i in slots)
+        ordered = [i for i in dict.fromkeys(item_ids) if i in present]
+        for slot, item_id in zip(slots, ordered):
+            self._waiting[slot] = item_id
+
+    def move(self, item_id: str, front: bool) -> None:
+        """Front (process next) or end of the waiting list."""
+        if item_id in self._source:
+            self._waiting.remove(item_id)
+            self._waiting.insert(0, item_id) if front else self._waiting.append(item_id)
+
+    def blocked_ids(self) -> set[str]:
+        """Books currently held back waiting for an Anna's Archive fast-download slot."""
+        return set(self._aa_blocked)
 
     async def drain(self) -> None:
         """Wait until nothing is queued or running (used by tests)."""
@@ -114,31 +129,44 @@ class Worker:
         No awaits: atomic within the event loop."""
         if self.service.paused():
             return None
+        # Everything a pass needs is read once up front; per book it's only in-memory checks, and
+        # nothing is written to the database (this runs on every click and every finished download,
+        # with thousands of books queued).
         busy = self.running_by_source()
+        limits: dict[str, int] = {}
+        blocked = self.service.aa_blocked_checker()
+        any_blocked = False
         for i, item_id in enumerate(self._waiting):
             src = self._source[item_id]
-            if busy[src] >= self.service.s.source_limit(src):
+            limit = limits.get(src)
+            if limit is None:
+                limit = limits[src] = self.service.s.source_limit(src)
+            if busy[src] >= limit:
                 continue
             release = self._release.get(item_id)
-            if self.service.aa_blocked(release):
-                self._note_waiting_for_slot(item_id)
+            if blocked(release):
+                self._aa_blocked.add(item_id)  # shown as "waiting for a fast download slot"
+                any_blocked = True
                 continue
+            self._aa_blocked.discard(item_id)
             del self._waiting[i]
             self._running[item_id] = self._source.pop(item_id)
             self._release.pop(item_id, None)
-            self._aa_noted.discard(item_id)
             if is_aa_release(release):
                 self.service.aa.reserve(aa_md5(release))  # counts until Anna's Archive confirms it
             return item_id
+        if any_blocked:
+            self._schedule_aa_wake()
+        else:
+            self._aa_blocked.clear()  # nothing is held back any more
         return None
 
-    def _note_waiting_for_slot(self, item_id: str) -> None:
-        if item_id not in self._aa_noted:
-            self._aa_noted.add(item_id)
-            self.service.state.update(item_id, message="Waiting for an Anna's Archive fast download slot")
-        # Wake up when a slot is certain to have freed (the periodic check usually notices sooner).
+    def _schedule_aa_wake(self) -> None:
+        """Wake up when a slot is certain to have freed (the periodic check usually notices sooner)."""
+        if self._aa_wake:
+            return
         nxt = self.service.aa.next_free_at()
-        if nxt and not self._aa_wake:
+        if nxt:
             delay = max(1.0, nxt - time.time() + 5)
             self._aa_wake = asyncio.get_running_loop().call_later(delay, self._aa_timer)
 
@@ -148,9 +176,10 @@ class Worker:
 
     def next_blocked_aa_md5(self) -> str | None:
         """md5 of the first book waiting for a fast-download slot (used to check the quota)."""
+        blocked = self.service.aa_blocked_checker()
         for item_id in self._waiting:
             release = self._release.get(item_id)
-            if self.service.aa_blocked(release):
+            if blocked(release):
                 return aa_md5(release)
         return None
 
@@ -190,7 +219,7 @@ class Worker:
             self._waiting.remove(item_id)
             del self._source[item_id]
             self._release.pop(item_id, None)
-            self._aa_noted.discard(item_id)
+            self._aa_blocked.discard(item_id)
             if not self._running and not self._waiting:
                 self._idle.set()
             return "waiting"

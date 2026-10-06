@@ -241,7 +241,7 @@ async def test_waiting_direct_download_does_not_block_torrents(settings, service
     for _ in range(20):
         await asyncio.sleep(0)
     assert started == ["tor"]  # the torrent went ahead; the Direct Download is held
-    assert "fast download slot" in service.state.get("dd")["message"]
+    assert worker.blocked_ids() == {"dd"}  # shown on the Activity page (not written to the database)
     assert worker.next_blocked_aa_md5() == C
 
     service.set_aa_wait(False)  # switching the toggle off releases it

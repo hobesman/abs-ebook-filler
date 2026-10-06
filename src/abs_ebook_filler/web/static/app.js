@@ -236,8 +236,10 @@
           dragging = false;
           if (evt.oldIndex === evt.newIndex) return;
           const ids = Array.from(tbody.querySelectorAll("tr.movable")).map((r) => r.dataset.itemId);
+          const live = tbody.closest(".activity-live");
+          const page = (live && live.dataset.page) || "1";
           htmx.ajax("POST", "/queue/reorder",
-                    { target: ".activity-live", swap: "innerHTML", values: { ids: ids } });
+                    { target: ".activity-live", swap: "outerHTML", values: { ids: ids, page: page } });
         },
       });
     });

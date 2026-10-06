@@ -65,16 +65,24 @@ class State:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock:
+            # WAL + synchronous=NORMAL: a commit no longer waits for the disk to flush every time
+            # (progress updates, saved searches and status changes are frequent). Still crash-safe.
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.executescript(_SCHEMA)
             self._migrate()
             self._conn.commit()
 
     def _migrate(self) -> None:
-        """Add columns introduced after a database was first created."""
+        """Add columns/indexes introduced after a database was first created."""
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(items)")}
         if "queued_at" not in cols:
             # When the book entered the download queue; keeps the Activity list in queue order.
             self._conn.execute("ALTER TABLE items ADD COLUMN queued_at REAL")
+        # Lets "which books have results ready" read a small index instead of the whole (large)
+        # saved-search table.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_search_cache_created ON search_cache(created_at, item_id, complete)")
 
     def close(self) -> None:
         self._conn.close()
@@ -194,6 +202,19 @@ class State:
         return disabled
 
     # ---- queue order -------------------------------------------------------------
+    def move_to_edge(self, item_id: str, front: bool) -> bool:
+        """Move a queued book to the front (⤒) or end (⤓) of the queue: one row update."""
+        with self._lock:
+            agg = "MIN" if front else "MAX"
+            edge = self._conn.execute(
+                f"SELECT {agg}(COALESCE(queued_at, created_at)) FROM items WHERE status='queued'").fetchone()[0]
+            if edge is None:
+                return False
+            cur = self._conn.execute("UPDATE items SET queued_at=? WHERE item_id=? AND status='queued'",
+                                     (edge - 1 if front else edge + 1, item_id))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     def reorder_queue(self, item_ids: list[str]) -> None:
         """Put these queued books in this order by handing their existing queued_at values back out
         sorted. Books not listed keep their position; nothing outside the group moves."""
@@ -236,6 +257,13 @@ class State:
                 (item_id, query, time.time() - max_age),
             ).fetchone()
         return (json.loads(r[0]), r[1]) if r else None
+
+    def has_saved_search(self, item_id: str, max_age: float) -> bool:
+        """Does this one book have saved results newer than ``max_age``? (primary-key lookup)"""
+        with self._lock:
+            r = self._conn.execute("SELECT 1 FROM search_cache WHERE item_id=? AND created_at >= ? LIMIT 1",
+                                   (item_id, time.time() - max_age)).fetchone()
+        return r is not None
 
     def searched_ids(self, max_age: float, complete_only: bool = False) -> set[str]:
         """Items with saved search results newer than ``max_age`` seconds."""

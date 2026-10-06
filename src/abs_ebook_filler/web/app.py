@@ -363,19 +363,33 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         row = svc(request).state.get(item_id)
         if not row:
             return HTMLResponse("")
-        return templates.TemplateResponse(request, "_row.html", ctx(request, row=row,
-                                                                    ready=_ready(svc(request))))
+        s = svc(request)
+        # Just this one book (the full "results ready" set means reading the whole saved-search index).
+        ready = {item_id} if s.state.has_saved_search(item_id, s.s.search_cache_seconds) else set()
+        return templates.TemplateResponse(request, "_row.html", ctx(request, row=row, ready=ready))
 
     # ---- activity ----------------------------------------------------------------
-    def _rows_ctx(request: Request) -> dict:
-        """Started books first (downloading, then parked in Shelfmark's queue) - they can't be moved -
-        then everything still waiting in our queue, in queue order (State.active() order)."""
+    QUEUE_PAGE_SIZE = 100
+
+    def _rows_ctx(request: Request, page: int = 1) -> dict:
+        """One page of the queue: started books first (downloading, then parked in Shelfmark's queue;
+        they can't be moved), then everything still waiting in our queue, in queue order."""
         s = svc(request)
-        claimed = request.app.state.worker.claimed_ids()
+        worker = request.app.state.worker
+        claimed = worker.claimed_ids()
         active = sorted(s.state.active(),
                         key=lambda r: (r["item_id"] not in claimed, r["status"] != "downloading"))
-        return {"active": active, "recent": s.state.recent(), "claimed": claimed,
+        total = len(active)
+        pages = max(1, -(-total // QUEUE_PAGE_SIZE))
+        page = max(1, min(page, pages))
+        start = (page - 1) * QUEUE_PAGE_SIZE
+        return {"active": active[start:start + QUEUE_PAGE_SIZE], "total": total, "page": page, "pages": pages,
+                "first_index": start, "recent": s.state.recent(), "claimed": claimed,
+                "blocked": worker.blocked_ids(),
                 "n_downloading": sum(1 for r in active if r["status"] == "downloading")}
+
+    def _rows(request: Request, page: int = 1):
+        return templates.TemplateResponse(request, "_activity_rows.html", ctx(request, **_rows_ctx(request, page)))
 
     def _controls_ctx(request: Request) -> dict:
         ar: AutoRetry = request.app.state.autoretry
@@ -392,17 +406,16 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
                 "aa_frees_in": _until(aa["next_free_at"]) if aa["next_free_at"] else "",
                 # ↻ feedback: show what the last check did for a minute and a half after it ran
                 "aa_just_checked": bool(aa["last_attempt_at"]) and time.time() - aa["last_attempt_at"] < 90,
-                "aa_waiting": sum(1 for r in s.state.active()
-                                  if r["status"] == "queued" and "fast download slot" in (r["message"] or ""))}
+                "aa_waiting": len(request.app.state.worker.blocked_ids())}
 
     @r.get("/activity", response_class=HTMLResponse)
-    async def activity(request: Request):
+    async def activity(request: Request, page: int = 1):
         return templates.TemplateResponse(request, "activity.html", ctx(
-            request, **_rows_ctx(request), **_controls_ctx(request)))
+            request, **_rows_ctx(request, page), **_controls_ctx(request)))
 
     @r.get("/activity/rows", response_class=HTMLResponse)
-    async def activity_rows(request: Request):
-        return templates.TemplateResponse(request, "_activity_rows.html", ctx(request, **_rows_ctx(request)))
+    async def activity_rows(request: Request, page: int = 1):
+        return _rows(request, page)
 
     def _controls(request: Request):
         return templates.TemplateResponse(request, "_activity_controls.html",
@@ -447,12 +460,12 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         request.app.state.worker.reorder(ids)
 
     @r.post("/queue/reorder", response_class=HTMLResponse)
-    async def queue_reorder(request: Request, ids: list[str] = Form([])):
-        _reorder(request, ids)
-        return await activity_rows(request)
+    async def queue_reorder(request: Request, ids: list[str] = Form([]), page: int = Form(1)):
+        _reorder(request, ids)  # one page's books, within their own positions
+        return _rows(request, page)
 
     @r.post("/queue/{item_id}/cancel", response_class=HTMLResponse)
-    async def queue_cancel(request: Request, item_id: str):
+    async def queue_cancel(request: Request, item_id: str, page: int = Form(1)):
         """Red ✕ on the Activity page: drop the book from the queue (stopping its download if it
         started) and mark it skipped."""
         s = svc(request)
@@ -465,7 +478,7 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         if where == "running" or row["status"] == "downloading":
             await s.cancel_in_shelfmark(item_id)
         s.mark_cancelled(item_id)
-        return await activity_rows(request)
+        return _rows(request, page)
 
     @r.post("/queue-perfect")
     async def queue_perfect(request: Request, count: int = Form(10), library: str = Form(""),
@@ -484,12 +497,22 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
         return _redirect_back(request, msg)
 
     @r.post("/queue/{item_id}/next", response_class=HTMLResponse)
-    async def queue_next(request: Request, item_id: str):
-        claimed = request.app.state.worker.claimed_ids()
-        waiting = [r["item_id"] for r in svc(request).state.active()
-                   if r["status"] == "queued" and r["item_id"] not in claimed]
-        _reorder(request, [item_id] + [i for i in waiting if i != item_id])
-        return await activity_rows(request)
+    async def queue_next(request: Request, item_id: str, page: int = Form(1)):
+        """⤒ Process this book next (front of the queue)."""
+        _move(request, item_id, front=True)
+        return _rows(request, page)
+
+    @r.post("/queue/{item_id}/last", response_class=HTMLResponse)
+    async def queue_last(request: Request, item_id: str, page: int = Form(1)):
+        """⤓ Send this book to the end of the queue."""
+        _move(request, item_id, front=False)
+        return _rows(request, page)
+
+    def _move(request: Request, item_id: str, front: bool) -> None:
+        if item_id in request.app.state.worker.claimed_ids():
+            return  # already started
+        if svc(request).state.move_to_edge(item_id, front):
+            request.app.state.worker.move(item_id, front)
 
     def _retry(request: Request, item_id: str) -> None:
         s = svc(request)
@@ -509,14 +532,14 @@ def create_app(settings: Settings | None = None, service: Service | None = None)
 
     # Activity-page versions re-render the activity table.
     @r.post("/retry/{item_id}", response_class=HTMLResponse)
-    async def retry(request: Request, item_id: str):
+    async def retry(request: Request, item_id: str, page: int = Form(1)):
         _retry(request, item_id)
-        return await activity_rows(request)
+        return _rows(request, page)
 
     @r.post("/unmatch/{item_id}", response_class=HTMLResponse)
-    async def unmatch_activity(request: Request, item_id: str):
+    async def unmatch_activity(request: Request, item_id: str, page: int = Form(1)):
         _unmatch(request, item_id)
-        return await activity_rows(request)
+        return _rows(request, page)
 
     # Panel versions re-render the book panel and refresh its list row.
     @r.post("/book/{item_id}/retry", response_class=HTMLResponse)

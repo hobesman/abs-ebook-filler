@@ -108,8 +108,11 @@ Titles with a genuine two-digit number (e.g. *The 39 Steps*) will be over-trimme
   - **In progress (N)** shows how many books are downloading/queued at a glance.
   - **Cancel** a queued or downloading book with its red ✕: it's removed from the queue (its Shelfmark
     download is stopped too, unless another book is sharing that release) and marked skipped.
-  - **Reorder the queue** by dragging a book by its ⋮⋮ handle, or click ⤒ to process it next. Books already
-    started (downloading or waiting in Shelfmark's queue) stay pinned at the top.
+  - The queue is **paged** (100 per page, with its position number on each book); the 2-second refresh stays
+    on the page you're viewing.
+  - **Reorder the queue** by dragging a book by its ⋮⋮ handle (within the page), click ⤒ to process it next,
+    or ⤓ to send it to the end. Books already started (downloading or waiting in Shelfmark's queue) stay
+    pinned at the top of page 1.
   - **Auto-retry failed downloads** (switch): re-queues every failed download immediately, then every
     `AUTO_RETRY_MINUTES` (60) until switched off. Failures a retry can't fix (ebook already exists, folder not
     found) are left alone. The setting survives restarts.

@@ -1,11 +1,33 @@
+{# The whole live area: refreshes itself every 2s and stays on the page being viewed. hx-vals is
+   inherited, so every button in here (✕, ⤒, ⤓, Retry, Unmatch) also sends the current page. #}
+<div class="activity-live" data-page="{{ page }}"
+     hx-get="/activity/rows" hx-vals='{"page": {{ page }}}' hx-trigger="every 2s" hx-swap="outerHTML">
+
+{% macro pager() %}
+  {% if pages > 1 %}
+  <nav class="pager" aria-label="Queue pages">
+    <button class="small secondary outline" hx-get="/activity/rows" hx-target="closest div.activity-live"
+            hx-vals='{"page": 1}' {% if page == 1 %}disabled{% endif %} title="First page">«</button>
+    <button class="small secondary outline" hx-get="/activity/rows" hx-target="closest div.activity-live"
+            hx-vals='{"page": {{ page - 1 }}}' {% if page == 1 %}disabled{% endif %}>‹ Prev</button>
+    <span>Page {{ page }} of {{ pages }} <small class="muted">(books {{ first_index + 1 }}–{{ first_index + active|length }} of {{ total }})</small></span>
+    <button class="small secondary outline" hx-get="/activity/rows" hx-target="closest div.activity-live"
+            hx-vals='{"page": {{ page + 1 }}}' {% if page == pages %}disabled{% endif %}>Next ›</button>
+    <button class="small secondary outline" hx-get="/activity/rows" hx-target="closest div.activity-live"
+            hx-vals='{"page": {{ pages }}}' {% if page == pages %}disabled{% endif %} title="Last page">»</button>
+  </nav>
+  {% endif %}
+{% endmacro %}
+
 <h3 class="queue-head">
-  In progress <span class="count">({{ active|length }})</span>
-  {% if active %}<small class="muted">{{ n_downloading }} downloading · {{ active|length - n_downloading }} queued</small>{% endif %}
+  In progress <span class="count">({{ total }})</span>
+  {% if total %}<small class="muted">{{ n_downloading }} downloading · {{ total - n_downloading }} queued{% if blocked %} · {{ blocked|length }} waiting for a fast download slot{% endif %}</small>{% endif %}
   {% if paused %}<small class="paused-note">⏸ Paused</small>{% endif %}
 </h3>
-{% if not active %}
+{% if not total %}
   <p class="muted">Nothing downloading.</p>
 {% else %}
+{{ pager() }}
 <div class="overflow-auto">
 <table class="activity">
   <colgroup>
@@ -15,17 +37,23 @@
   <tbody class="queue-sortable">
   {% for r in active %}
     {% set movable = r.item_id not in claimed %}
+    {% set message = "Waiting for an Anna's Archive fast download slot" if r.item_id in blocked else r.message %}
     <tr data-item-id="{{ r.item_id }}"
         class="{% if r.status == 'downloading' %}current{% endif %}{% if movable %} movable{% endif %}">
-      <td class="grip-cell">{% if movable %}
-        <span class="grip" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+      <td class="grip-cell">
+        <small class="pos muted" title="Position in the queue">{{ first_index + loop.index }}</small>
+        {% if movable %}
+        <span class="grip" title="Drag to reorder (within this page)" aria-hidden="true">⋮⋮</span>
         <button class="small secondary outline next-btn" hx-post="/queue/{{ r.item_id }}/next"
                 hx-target="closest div.activity-live" title="Process this book next">⤒</button>
-      {% endif %}</td>
+        <button class="small secondary outline next-btn" hx-post="/queue/{{ r.item_id }}/last"
+                hx-target="closest div.activity-live" title="Send to the end of the queue">⤓</button>
+        {% endif %}
+      </td>
       <td>{{ r.clean_title }}<br><small class="muted">{{ r.author }}</small></td>
       <td><span class="badge st-{{ r.status }}">{{ r.status }}</span></td>
       <td>{% if r.status == "downloading" %}{% if r.progress is not none %}<progress value="{{ r.progress }}" max="100"></progress>{% else %}<progress></progress>{% endif %}{% endif %}</td>
-      <td class="detail" title="{{ r.message }}"><small>{{ r.message }}</small></td>
+      <td class="detail" title="{{ message }}"><small>{{ message }}</small></td>
       <td class="x-cell">
         <button class="cancel-x" hx-post="/queue/{{ r.item_id }}/cancel" hx-target="closest div.activity-live"
                 hx-confirm="Cancel “{{ r.clean_title }}”? It will be removed from the queue{% if r.status == 'downloading' or r.item_id in claimed %} and its download stopped{% endif %}, and marked skipped."
@@ -36,6 +64,7 @@
   </tbody>
 </table>
 </div>
+{{ pager() }}
 {% endif %}
 
 <h3>Recent</h3>
@@ -72,3 +101,4 @@
 </table>
 </div>
 {% endif %}
+</div>

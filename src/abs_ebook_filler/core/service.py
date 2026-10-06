@@ -34,6 +34,7 @@ class Service:
         self._paused_until = float(self.state.get_pref("paused_until", 0) or 0)
         self.aa = AnnasQuota(self.state, settings.annas_archive_key, settings.annas_archive_url,
                              settings.http_timeout)
+        self._aa_wait: bool | None = None
         self.sm = shelfmark or ShelfmarkClient(
             settings.shelfmark_url, settings.shelfmark_api_key, settings.http_timeout,
             search_timeout=settings.search_timeout, search_concurrency=settings.search_concurrency)
@@ -47,15 +48,24 @@ class Service:
     # ---- Anna's Archive fast-download slots --------------------------------------
     def aa_wait_enabled(self) -> bool:
         """Hold Anna's Archive Direct Downloads until a fast-download slot is free (Activity switch)."""
-        return self.aa.configured and bool(self.state.get_pref("aa_wait_for_fast", False))
+        if self._aa_wait is None:  # read once, then kept in memory (checked for every queued book)
+            self._aa_wait = bool(self.state.get_pref("aa_wait_for_fast", False))
+        return self.aa.configured and self._aa_wait
 
     def set_aa_wait(self, enabled: bool) -> None:
+        self._aa_wait = bool(enabled)
         self.state.set_pref("aa_wait_for_fast", bool(enabled))
 
     def aa_blocked(self, release: dict[str, Any] | None) -> bool:
         """True if this release should wait for a fast-download slot right now."""
-        return (self.aa_wait_enabled() and is_aa_release(release)
-                and not self.aa.slot_available(aa_md5(release)))
+        return self.aa_blocked_checker()(release)
+
+    def aa_blocked_checker(self) -> Callable[[dict[str, Any] | None], bool]:
+        """A cheap per-release test for one pass over the queue (settings read once, not per book)."""
+        if not self.aa_wait_enabled():
+            return lambda release: False
+        md5_blocked = self.aa.blocked_md5s_checker()
+        return lambda release: is_aa_release(release) and md5_blocked(aa_md5(release))
 
     # ---- scanning ----------------------------------------------------------------
     async def scan(self) -> dict[str, int]:
